@@ -98,7 +98,7 @@ html,body{margin:0;padding:0;font-family:'Cairo',sans-serif;background:#f0f4ff;c
 <body>
 
 <!-- ===== AUTH OVERLAY ===== -->
-<div id="auth-overlay" style="position:fixed;inset:0;z-index:9999;background:#0a0f1e;display:flex;align-items:center;justify-content:center;flex-direction:column">
+<div id="auth-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;min-height:100vh;z-index:99999;background:#0a0f1e;display:flex;align-items:center;justify-content:center;flex-direction:column;overflow:hidden">
 
   <!-- SPLASH SCREEN -->
   <div id="splash-screen" style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%">
@@ -313,10 +313,12 @@ html,body{margin:0;padding:0;font-family:'Cairo',sans-serif;background:#f0f4ff;c
     <button class="btn bg bi" onclick="openAdminPanel()" title="لوحة الأدمن" id="admin-btn" style="background:#fff0f0;color:#e03131;display:none">
       <span class="ms">admin_panel_settings</span>
     </button>
-    <!-- Firebase indicator -->
+    <!-- separator -->
+    <div style="width:1px;height:20px;background:#dde3f0;flex-shrink:0"></div>
+    <!-- Firebase indicator — منفصل عن البصمة -->
     <div id="fb-indicator" onclick="openFbPanel()" title="Firebase Sync" style="display:none;align-items:center;gap:5px;padding:4px 10px;border-radius:8px;background:#fff7ed;border:1px solid #fed7aa;cursor:pointer">
       <span id="fb-dot" style="width:8px;height:8px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:all .3s"></span>
-      <span id="fb-lbl" style="font-size:10.5px;font-weight:700;color:#94a3b8">☁️ Firebase</span>
+      <span id="fb-lbl" style="font-size:10.5px;font-weight:700;color:#94a3b8">☁️</span>
     </div>
     <button id="pwa-install-btn" onclick="installPWA()" title="تثبيت التطبيق" style="display:none;background:#eef2ff;color:#0f2057;border:none;border-radius:10px;padding:6px 12px;cursor:pointer;align-items:center;gap:6px;font-size:12px;font-weight:700;font-family:Cairo,sans-serif">
       <span class="ms ms-sm">install_desktop</span>تثبيت
