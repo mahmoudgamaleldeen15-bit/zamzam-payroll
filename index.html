@@ -2415,7 +2415,16 @@ function saveAtt(){
   const dt=document.getElementById('af-dt').value;if(!dt){toast('التاريخ مطلوب','error');return}
   const[yr,mn,dy]=dt.split('-');const lateMin=Number(document.getElementById('af-late')?.value||0);const rec={id:uid(),eid,dt,y:Number(yr),m:Number(mn),d:Number(dy),ti:document.getElementById('af-in').value,to:document.getElementById('af-out').value,ot:Number(document.getElementById('af-ot').value||0),ott:document.getElementById('af-ott').value,st:document.getElementById('af-st').value,nt:document.getElementById('af-nt').value,lateMin,isLate:lateMin>gr('lt_gr',15)};DB.att.push(rec);sv('att',DB.att);document.getElementById('att-mo').classList.remove('open');toast('تم تسجيل الحضور','success');renderAtt();renderDash();}
 function renderAtt(){
-  const ef=document.getElementById('at-ef')?.value||'';
+  // تعبئة قائمة الموظفين في at-ef
+  const efEl = document.getElementById('at-ef');
+  if(efEl && efEl.options.length <= 1){
+    const curVal = efEl.value;
+    efEl.innerHTML = '<option value="">كل الموظفين</option>' +
+      DB.emp.filter(e=>e.st==='نشط')
+        .map(e=>`<option value="${e.id}">${e.nm}</option>`).join('');
+    if(curVal) efEl.value = curVal;
+  }
+  const ef=efEl?.value||'';
   const mf=document.getElementById('at-mf')?.value||'';
   const fromD=document.getElementById('at-from')?.value||'';
   const toD=document.getElementById('at-to')?.value||'';
@@ -2922,27 +2931,25 @@ function importAttCSV(input){
         if(!exists){
           DB.att.push(r); added++;
         } else {
-          // مضاء مزدوج حضور (نفس timeIn) → تجاهل الثاني
-          if(r.ti && exists.ti && r.ti === exists.ti){
-            // لو الثاني عنده timeOut والأول ملوش → نكمل الأول
-            if(r.to && !exists.to){
-              const eIdx=DB.att.indexOf(exists);
-              DB.att[eIdx].to=r.to;
-              added++;
-            } else { skipped++; }
+          // مضاء مزدوج حضور:
+          // لو جاء سجل بنفس timeIn أو بفارق أقل من 10 دقائق → تجاهل (بدون إضافة انصراف)
+          const timeDiffMins = (()=>{
+            if(!r.ti || !exists.ti) return 999;
+            const [h1,m1]=exists.ti.split(':').map(Number);
+            const [h2,m2]=r.ti.split(':').map(Number);
+            return Math.abs((h2*60+m2)-(h1*60+m1));
+          })();
+          if(r.ti && timeDiffMins < 10){
+            // مضاء مزدوج في الحضور → تجاهل الثاني خالص
+            skipped++;
           }
-          // مضاء مزدوج انصراف (نفس timeOut) → اعتمد الأخير (أو تجاهل)
-          else if(r.to && exists.to && r.to === exists.to){
-            skipped++; // نفس الانصراف — تجاهل
-          }
-          // سجل موجود بدون timeOut → أضف الانصراف
-          else if(!exists.to && (r.to || r.ti)){
+          // مضاء انصراف (timeOut مختلف وفارق أكبر من 10 دقيقة) → أضفه كانصراف
+          else if(!exists.to && r.ti && timeDiffMins >= 10){
             const eIdx=DB.att.indexOf(exists);
-            const toTime = r.to || r.ti;
-            DB.att[eIdx].to = toTime;
-            if(exists.ti && toTime){
+            DB.att[eIdx].to = r.ti;
+            if(exists.ti){
               const[h1,m1]=exists.ti.split(':').map(Number);
-              const[h2,m2]=toTime.split(':').map(Number);
+              const[h2,m2]=r.ti.split(':').map(Number);
               const mins=(h2*60+m2)-(h1*60+m1);
               if(mins>0) DB.att[eIdx].hours=(mins/60).toFixed(1);
             }
