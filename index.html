@@ -2009,6 +2009,7 @@ function convertAttStatus(attId, newStatus, opts={}){
       DB.leaves[lIdx].status = 'ملغاة';
       DB.leaves[lIdx].cancelledAt = new Date().toISOString();
       DB.leaves[lIdx].cancelReason = 'تحويل حالة من كشف المرتبات';
+      sv('leaves', DB.leaves);
     }
   }
 
@@ -4186,9 +4187,33 @@ async function startFetch(){
 
     setProgress(90,'💾 جاري الحفظ...');// استيراد الحضور
     records.forEach(r=>{
-      const emp=DB.emp.find(e=>e.cd===r.empCode);if(!emp)return;const eid=emp.id;if(skipDup&&DB.att.find(a=>a.eid===eid&&a.dt===r.date)){skippedAtt++;return;}
-      // حذف المكرر وإضافة الجديد
-      DB.att=DB.att.filter(a=>!(a.eid===eid&&a.dt===r.date));DB.att.push({
+      const emp=DB.emp.find(e=>e.cd===r.empCode);if(!emp)return;const eid=emp.id;// منطق المضاء المزدوج
+      const existFetch=DB.att.find(a=>a.eid===eid&&a.dt===r.date);
+      if(existFetch){
+        if(skipDup){skippedAtt++;return;}
+        // تحقق من المضاء المزدوج (نفس الوقت أو فارق < 10 دقائق)
+        const tiFetch = normalizeTime(r.timeIn)||'';
+        const diffMins=(()=>{
+          if(!tiFetch||!existFetch.ti) return 999;
+          const [h1,m1]=existFetch.ti.split(':').map(Number);
+          const [h2,m2]=tiFetch.split(':').map(Number);
+          return Math.abs((h2*60+m2)-(h1*60+m1));
+        })();
+        if(diffMins < 10){skippedAtt++;return;} // مضاء مزدوج → تجاهل
+        // وإلا: سجل انصراف مختلف → حدّث الموجود
+        const eIdx=DB.att.indexOf(existFetch);
+        if(eIdx>=0 && !existFetch.to && tiFetch){
+          DB.att[eIdx].to=tiFetch;
+          const[h1,m1]=existFetch.ti.split(':').map(Number);
+          const[h2,m2]=tiFetch.split(':').map(Number);
+          const mins=(h2*60+m2)-(h1*60+m1);
+          if(mins>0) DB.att[eIdx].hours=(mins/60).toFixed(1);
+          addedAtt++;
+        } else skippedAtt++;
+        return;
+      }
+      // سجل جديد
+      DB.att.push({
         id:r.id||uid(),eid,
         dt:r.date,y:r.year,m:r.month,d:r.day,
         ti:r.timeIn,to:r.timeOut,
@@ -5133,6 +5158,11 @@ function savePayrollDayEdit(eid, dt){
   renderPay();
   renderAtt();
   renderDash();
+  if(typeof renderLeave === 'function') renderLeave();
+  if(typeof renderLeaveTable === 'function'){
+    const emps = DB.emp.filter(e=>e.st==='نشط');
+    renderLeaveTable(emps);
+  }
 }
 
 // ===== تقرير الحضور والانصراف اليومي =====
