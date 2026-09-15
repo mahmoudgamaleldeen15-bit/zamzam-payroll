@@ -2,7 +2,7 @@
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"/>
 <meta name="theme-color" content="#0f2057"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-title" content="زمزم Payroll"/>
@@ -98,7 +98,7 @@ html,body{margin:0;padding:0;font-family:'Cairo',sans-serif;background:#f0f4ff;c
 <body style="overflow:hidden">
 <style>
 /* إخفاء كل حاجة ورا auth-overlay */
-body.auth-mode > *:not(#auth-overlay) {
+body.auth-mode > *:not(#auth-overlay):not(#admin-mo):not([class~="mo"]):not(style) {
   visibility: hidden !important;
   pointer-events: none !important;
 }
@@ -114,6 +114,9 @@ body.auth-mode {
   height: 100% !important;
   z-index: 999999 !important;
   overflow-y: auto !important;
+}
+#admin-mo {
+  z-index: 9999999 !important;
 }
 </style>
 
