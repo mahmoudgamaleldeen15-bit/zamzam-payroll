@@ -2360,6 +2360,18 @@ function normalizeTime(t){
   if(/^\d{1,2}:\d{2}$/.test(t)) return t;
   return t;
 }
+
+function formatTime12(t){
+  if(!t||t==='—'||t===''||t===null) return '—';
+  const norm = normalizeTime(t);
+  if(!norm) return '—';
+  const parts = norm.split(':');
+  if(parts.length<2) return norm;
+  let h=parseInt(parts[0])||0, m=parseInt(parts[1])||0;
+  const ampm = h>=12 ? 'PM' : 'AM';
+  const h12 = h%12||12;
+  return `${String(h12).padStart(2,'0')}:${String(m).padStart(2,'0')} ${ampm}`;
+}
 function calcH(t1,t2){
   const n1=normalizeTime(t1), n2=normalizeTime(t2);
   if(!n1||!n2) return '—';
