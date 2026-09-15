@@ -539,6 +539,12 @@ body.auth-mode {
       <span style="font-size:13px;font-weight:800;color:#0f2057">سجل الحضور</span>
       <div style="display:flex;gap:8px;align-items:center">
         <input type="month" class="fi" id="at-mf" style="width:auto" onchange="renderAtt()"/>
+        <!-- من/إلى تاريخ -->
+        <div style="display:flex;align-items:center;gap:5px">
+          <input type="date" class="fi" id="at-from" style="width:auto" onchange="renderAtt()" title="من تاريخ"/>
+          <span style="font-size:11px;color:#94a3b8">→</span>
+          <input type="date" class="fi" id="at-to" style="width:auto" onchange="renderAtt()" title="إلى تاريخ"/>
+        </div>
         <select class="fi" id="at-ef" style="width:auto;min-width:155px" onchange="renderAtt()"><option value="">كل الموظفين</option></select>
       </div>
     </div>
@@ -1168,6 +1174,18 @@ body.auth-mode {
   </label>
   <input type="hidden" id="ef-al"/>
 </div>
+      <div>
+        <label class="fl">ميعاد الحضور <span style="font-size:10px;color:#94a3b8">(الوقت المحدد للموظف)</span></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="fi" id="ef-workTime" type="time" style="flex:1" placeholder="08:00"
+            title="وقت حضور الموظف — يُستخدم لحساب OT والانصراف المتوقع"/>
+          <div id="ef-workTime-preview" style="font-size:11px;color:#0369a1;white-space:nowrap"></div>
+        </div>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:2px">
+          الانصراف المتوقع: <span id="ef-expected-out" style="color:#0f2057;font-weight:700">—</span> |
+          بداية OT: <span id="ef-ot-start" style="color:#d97706;font-weight:700">—</span>
+        </div>
+      </div>
       <div><label class="fl">رقم الهاتف</label><input class="fi" id="ef-ph" type="tel" placeholder="01xxxxxxxxx" dir="ltr"/></div>
       <div><label class="fl">تاريخ الالتحاق</label><input class="fi" id="ef-jn" type="date"/></div>
       <div><label class="fl">نوع الراتب</label><select class="fi" id="ef-tp"><option>شهري عادي</option><option>كادر إداري</option><option>أساسي + عمولة</option></select></div>
@@ -2077,31 +2095,66 @@ function getConversionPreview(attId, newStatus){
 
 
 
-// ===== حساب أوفرتايم الشيفتات المتعددة =====
+// ===== حساب أوفرتايم الشيفتات — Spec Section 3 =====
+// OT يبدأ بعد 8:30 من ميعاد حضور الموظف المحدد في كارته
 function calcShiftOT(eid, dt){
-  // اجمع كل سجلات الموظف في نفس اليوم
   const dayRecs = DB.att.filter(a=>a.eid===eid&&a.dt===dt);
   if(!dayRecs.length) return 0;
+
+  const emp = DB.emp.find(e=>e.id===eid);
 
   // مجموع ساعات العمل الفعلية
   let totalMins = 0;
   dayRecs.forEach(rec=>{
     if(rec.ti && rec.to){
-      const[h1,m1]=rec.ti.split(':').map(Number);
-      const[h2,m2]=rec.to.split(':').map(Number);
+      const[h1,m1]=normalizeTime(rec.ti).split(':').map(Number);
+      const[h2,m2]=normalizeTime(rec.to).split(':').map(Number);
       const mins=(h2*60+m2)-(h1*60+m1);
       if(mins>0) totalMins+=mins;
     }
   });
 
-  // وقت العمل المقرر = من كارت الموظف أو 8.5 ساعة
-  const emp = DB.emp.find(e=>e.id===eid);
-  const stdHrs = Number(emp?.workHrs||DB.rules?.['work_hrs']||8.5);
-  const stdMins = stdHrs * 60;
+  // بداية OT = ميعاد الحضور + 8:30 (510 دقيقة)
+  if(emp?.workTime){
+    const[wh,wm]=emp.workTime.split(':').map(Number);
+    const otStartMins = wh*60+wm+510; // +8:30
+    // نجيب أول بصمة حضور في اليوم
+    const firstRec = dayRecs.find(r=>r.ti);
+    if(firstRec && firstRec.to){
+      const[h2,m2]=normalizeTime(firstRec.to).split(':').map(Number);
+      const toMins = h2*60+m2;
+      const otMins = toMins - otStartMins;
+      // OT = الوقت بعد بداية OT فقط
+      if(otMins > 0) return Number((otMins/60).toFixed(1));
+    }
+    return 0;
+  }
 
-  // OT = مجموع الساعات - وقت العمل المقرر
+  // fallback: مجموع الساعات - 8.5 (لو مفيش workTime)
+  const stdMins = Number(DB.rules?.['work_hrs']||8.5) * 60;
   const otMins = totalMins - stdMins;
   return otMins > 0 ? Number((otMins/60).toFixed(1)) : 0;
+}
+
+// ===== حساب ساعات العمل والنقص =====
+function calcWorkBalance(eid, dt){
+  const dayRecs = DB.att.filter(a=>a.eid===eid&&a.dt===dt);
+  const emp = DB.emp.find(e=>e.id===eid);
+  if(!dayRecs.length) return {totalMins:0, requiredMins:480, balanceMins:0};
+
+  let totalMins = 0;
+  dayRecs.forEach(rec=>{
+    if(rec.ti && rec.to){
+      const[h1,m1]=normalizeTime(rec.ti).split(':').map(Number);
+      const[h2,m2]=normalizeTime(rec.to).split(':').map(Number);
+      const mins=(h2*60+m2)-(h1*60+m1);
+      if(mins>0) totalMins+=mins;
+    }
+  });
+
+  const requiredMins = 480; // 8 ساعات
+  const balanceMins = totalMins - requiredMins;
+  return { totalMins, requiredMins, balanceMins };
 }
 
 // ===== تحديث OT لكل سجلات اليوم بعد الاستيراد =====
@@ -2254,7 +2307,9 @@ function saveEmp(){
     leaveUsed:existEmp?.leaveUsed||{},
     st:'نشط'};if(id){const i=DB.emp.findIndex(x=>x.id===id);if(i>=0)DB.emp[i]=e}else DB.emp.push(e);sv('emp',DB.emp);closeEmpMo();toast(`تم حفظ ${nm}`,'success');renderEmp();renderDash();}
 function editEmp(id){
-  const e=DB.emp.find(x=>x.id===id);if(!e)return;document.getElementById('ef-id').value=e.id;['nm','cd','dp','ttl','bs','al','ph','jn','tp','ot'].forEach(k=>{const el=document.getElementById('ef-'+k);if(el)el.value=e[k]||''});document.getElementById('ef-in').value=e.ins||'مؤمَّن عليه';const insAmtEd=document.getElementById('ef-ins-amt');if(insAmtEd)insAmtEd.value=e.insAmt||'';const rdEl=document.getElementById('ef-rest-day');if(rdEl)rdEl.value=e.restDay??'';const lbEl=document.getElementById('ef-leave-bal');if(lbEl)lbEl.value=e.leaveBal||30;// تحميل البدلات
+  const e=DB.emp.find(x=>x.id===id);if(!e)return;document.getElementById('ef-id').value=e.id;['nm','cd','dp','ttl','bs','al','ph','jn','tp','ot'].forEach(k=>{const el=document.getElementById('ef-'+k);if(el)el.value=e[k]||''});document.getElementById('ef-in').value=e.ins||'مؤمَّن عليه';const insAmtEd=document.getElementById('ef-ins-amt');if(insAmtEd)insAmtEd.value=e.insAmt||'';const rdEl=document.getElementById('ef-rest-day');if(rdEl)rdEl.value=e.restDay??'';const lbEl=document.getElementById('ef-leave-bal');if(lbEl)lbEl.value=e.leaveBal||30;
+  // تحميل ميعاد الحضور
+  const wtEl=document.getElementById('ef-workTime');if(wtEl){ wtEl.value=e.workTime||''; wtEl.dispatchEvent(new Event('change')); }// تحميل البدلات
   loadAllowancesFromEmp(e);// تحميل المسمى
   const tsel=document.getElementById('ef-ttl-select');if(tsel){
     const knownTitles=['شيف شرقى','مساعد شيف شرقى','شيف عمومى شرقى','شيف حلويات غربى','مساعد شيف غربى','شيف عمومى غربى','شيف مخبوزات','شيف مساعد مخبوزات','سائق','مندوب مبيعات','محاسب','مدير مالى','مدير مبيعات','مراقب جوده','شيف','مساعد شيف','مدير اداره','نائب مدير','مدير تنفيذى','مدير تسويق','امين مخزن','مساعد امين مخزن'];if(knownTitles.includes(e.ttl)){tsel.value=e.ttl;document.getElementById('ef-ttl').style.display='none';document.getElementById('ef-ttl').value=e.ttl;}
@@ -2360,7 +2415,23 @@ function saveAtt(){
   const dt=document.getElementById('af-dt').value;if(!dt){toast('التاريخ مطلوب','error');return}
   const[yr,mn,dy]=dt.split('-');const lateMin=Number(document.getElementById('af-late')?.value||0);const rec={id:uid(),eid,dt,y:Number(yr),m:Number(mn),d:Number(dy),ti:document.getElementById('af-in').value,to:document.getElementById('af-out').value,ot:Number(document.getElementById('af-ot').value||0),ott:document.getElementById('af-ott').value,st:document.getElementById('af-st').value,nt:document.getElementById('af-nt').value,lateMin,isLate:lateMin>gr('lt_gr',15)};DB.att.push(rec);sv('att',DB.att);document.getElementById('att-mo').classList.remove('open');toast('تم تسجيل الحضور','success');renderAtt();renderDash();}
 function renderAtt(){
-  const ef=document.getElementById('at-ef')?.value||'';const mf=document.getElementById('at-mf')?.value||'';let recs=DB.att;if(ef)recs=recs.filter(a=>a.eid===ef);if(mf){const[y,m]=mf.split('-');recs=recs.filter(a=>a.y===Number(y)&&a.m===Number(m))}else recs=recs.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;const tb=document.getElementById('at-body');if(!recs.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">fingerprint</span>لا سجلات</td></tr>';return}
+  const ef=document.getElementById('at-ef')?.value||'';
+  const mf=document.getElementById('at-mf')?.value||'';
+  const fromD=document.getElementById('at-from')?.value||'';
+  const toD=document.getElementById('at-to')?.value||'';
+  let recs=DB.att;
+  if(ef) recs=recs.filter(a=>a.eid===ef);
+  // أولوية: من/إلى تاريخ > شهر > الشهر الحالي
+  if(fromD && toD){
+    recs=recs.filter(a=>a.dt>=fromD&&a.dt<=toD);
+  } else if(fromD){
+    recs=recs.filter(a=>a.dt>=fromD);
+  } else if(mf){
+    const[y,m]=mf.split('-');
+    recs=recs.filter(a=>a.y===Number(y)&&a.m===Number(m));
+  } else {
+    recs=recs.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);
+  }const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;const tb=document.getElementById('at-body');if(!recs.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">fingerprint</span>لا سجلات</td></tr>';return}
   const isAdmin=getSession()?.role==='admin';
   tb.innerHTML=recs.sort((a,b)=>b.dt.localeCompare(a.dt)).map(a=>{
     const e=DB.emp.find(x=>x.id===a.eid);const bg=a.st==='حضور'?'#dcfce7':a.st==='غياب بدون إذن'?'#ffe5e5':a.st==='إجازة اعتيادية'?'#f0edff':a.st==='راحة أسبوعية'?'#e0f2fe':a.st==='غياب بإذن'?'#fef3c7':'#fff7ed';const cl=a.st==='حضور'?'#16a34a':a.st==='غياب بدون إذن'?'#e03131':a.st==='إجازة اعتيادية'?'#7c3aed':a.st==='راحة أسبوعية'?'#0369a1':a.st==='غياب بإذن'?'#d97706':'#ea580c';return`<tr>
@@ -2374,6 +2445,18 @@ function renderAtt(){
   </td>
   <td style="text-align:center;font-weight:700">${a.ti&&a.to?calcH(a.ti,a.to):'—'}</td>
   <td style="text-align:center;color:#1e3a8a;font-weight:700">${Number(a.ot||0)>0?a.ot+'س':''}</td>
+  <td style="text-align:center">
+    ${(()=>{
+      if(!a.ti||!a.to) return '<span style="color:#94a3b8">—</span>';
+      const wb=calcWorkBalance(a.eid,a.dt);
+      const bal=wb.balanceMins;
+      const hrs=Math.abs(Math.floor(bal/60));
+      const mins=Math.abs(bal%60);
+      const txt=(bal<0?'-':bal>0?'+':'')+hrs+'س'+String(mins).padStart(2,'0')+'د';
+      const col=bal<0?'#e03131':bal>0?'#16a34a':'#94a3b8';
+      return `<span style="font-size:11px;font-weight:700;color:${col}">${txt}</span>`;
+    })()}
+  </td>
   <td style="text-align:center"><span class="bd" style="background:${bg};color:${cl}">${a.st}</span></td>
   <td style="text-align:center">
     <div style="display:flex;gap:3px;justify-content:center">
@@ -5060,6 +5143,33 @@ function reportDailyAttendance(el){
       <div><label class="fl">التاريخ</label>
         <input type="date" class="fi" id="att-report-date" style="width:auto" value="${new Date().toISOString().slice(0,10)}" onchange="renderDailyAttReport()"/>
       </div>
+      <!-- من/إلى تاريخ -->
+      <div>
+        <label class="fl">من تاريخ</label>
+        <input type="date" class="fi" id="att-rep-from" style="width:auto" onchange="renderDailyAttReport()"/>
+      </div>
+      <div>
+        <label class="fl">إلى تاريخ</label>
+        <input type="date" class="fi" id="att-rep-to" style="width:auto" onchange="renderDailyAttReport()"/>
+      </div>
+      <!-- فلتر الانصراف المبكر -->
+      <div>
+        <label class="fl">نوع</label>
+        <select class="fi" id="att-rep-type" style="width:auto" onchange="renderDailyAttReport()">
+          <option value="">الكل</option>
+          <option value="early">انصراف مبكر</option>
+          <option value="ot">أوفرتايم</option>
+          <option value="absent">غياب</option>
+        </select>
+      </div>
+      <!-- فلتر موظف -->
+      <div>
+        <label class="fl">الموظف</label>
+        <select class="fi" id="att-rep-emp" style="width:auto;min-width:140px" onchange="renderDailyAttReport()">
+          <option value="">جميع الموظفين</option>
+          ${DB.emp.filter(e=>e.st==='نشط').map(e=>`<option value="${e.id}">${e.nm}</option>`).join('')}
+        </select>
+      </div>
       <div><label class="fl">القسم</label>
         <select class="fi" id="att-report-dept" style="width:auto;min-width:140px" onchange="renderDailyAttReport()">
           <option value="">كل الأقسام</option>
@@ -5076,12 +5186,18 @@ function reportDailyAttendance(el){
 }
 
 function renderDailyAttReport(){
-  const date = document.getElementById('att-report-date')?.value;
-  const dept = document.getElementById('att-report-dept')?.value||'';
+  const date    = document.getElementById('att-report-date')?.value;
+  const dept    = document.getElementById('att-report-dept')?.value||'';
+  const fromD   = document.getElementById('att-rep-from')?.value||'';
+  const toD     = document.getElementById('att-rep-to')?.value||'';
+  const repType = document.getElementById('att-rep-type')?.value||'';
+  const repEmp  = document.getElementById('att-rep-emp')?.value||'';
   const el = document.getElementById('att-report-result');
-  if(!date||!el) return;
-
-  const [yr,mn,dy] = date.split('-').map(Number);
+  if(!el) return;
+  // لو فيه فترة زمنية → نستخدمها بدل التاريخ الواحد
+  const useRange = fromD && toD;
+  if(!date && !useRange) return;
+  const [yr,mn,dy] = (date||fromD).split('-').map(Number);
   const grace = gr('lt_gr',15);
   const dayName = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'][new Date(yr,mn-1,dy).getDay()];
   const MAR5=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
@@ -6317,12 +6433,17 @@ async function installPWA(){
 
 
 // ===== Service Worker Registration =====
+// بيشتغل بس على GitHub Pages وlocalhost — مش على claudeusercontent
 if('serviceWorker' in navigator){
-  window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('./sw.js')
-      .then(reg => console.log('SW registered'))
-      .catch(err => console.log('SW failed:', err));
-  });
+  const isGH = location.hostname.includes('github.io');
+  const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if(isGH || isLocal){
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('./sw.js')
+        .then(()=>{})
+        .catch(()=>{});
+    });
+  }
 }
 
 window.addEventListener('load', ()=>{
