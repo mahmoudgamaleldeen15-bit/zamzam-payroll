@@ -2076,6 +2076,45 @@ function getConversionPreview(attId, newStatus){
 }
 
 
+
+// ===== حساب أوفرتايم الشيفتات المتعددة =====
+function calcShiftOT(eid, dt){
+  // اجمع كل سجلات الموظف في نفس اليوم
+  const dayRecs = DB.att.filter(a=>a.eid===eid&&a.dt===dt);
+  if(!dayRecs.length) return 0;
+
+  // مجموع ساعات العمل الفعلية
+  let totalMins = 0;
+  dayRecs.forEach(rec=>{
+    if(rec.ti && rec.to){
+      const[h1,m1]=rec.ti.split(':').map(Number);
+      const[h2,m2]=rec.to.split(':').map(Number);
+      const mins=(h2*60+m2)-(h1*60+m1);
+      if(mins>0) totalMins+=mins;
+    }
+  });
+
+  // وقت العمل المقرر = من كارت الموظف أو 8.5 ساعة
+  const emp = DB.emp.find(e=>e.id===eid);
+  const stdHrs = Number(emp?.workHrs||DB.rules?.['work_hrs']||8.5);
+  const stdMins = stdHrs * 60;
+
+  // OT = مجموع الساعات - وقت العمل المقرر
+  const otMins = totalMins - stdMins;
+  return otMins > 0 ? Number((otMins/60).toFixed(1)) : 0;
+}
+
+// ===== تحديث OT لكل سجلات اليوم بعد الاستيراد =====
+function recalcDayOT(eid, dt){
+  const ot = calcShiftOT(eid, dt);
+  // نضع OT في السجل الأخير من اليوم (الانصراف النهائي)
+  const dayRecs = DB.att.filter(a=>a.eid===eid&&a.dt===dt);
+  dayRecs.forEach((rec, i)=>{
+    const idx = DB.att.indexOf(rec);
+    if(idx>=0) DB.att[idx].ot = (i===dayRecs.length-1) ? ot : 0;
+  });
+}
+
 function calcSlip(emp){
   const basic=Number(emp.bs)||0;
   const allowArr=emp.allowances||[];
@@ -2360,6 +2399,111 @@ function normalizeTime(t){
   // لو 24h format عادي
   if(/^\d{1,2}:\d{2}$/.test(t)) return t;
   return t;
+}
+
+
+// ===== تعديل سجل الحضور (للأدمن فقط) =====
+function openAttEdit(attId){
+  const session = getSession();
+  if(!session || session.role !== 'admin'){
+    toast('التعديل للأدمن فقط','error'); return;
+  }
+  const rec = DB.att.find(a=>a.id===attId);
+  if(!rec){ toast('السجل غير موجود','error'); return; }
+  const emp = DB.emp.find(e=>e.id===rec.eid);
+
+  document.getElementById('att-edit-mo')?.remove();
+  const mo = document.createElement('div');
+  mo.className='mo open'; mo.id='att-edit-mo';
+  mo.style.cssText='display:flex;z-index:400';
+
+  const tiVal = rec.ti||'';
+  const toVal = rec.to||'';
+  const statuses = ['حضور','غياب بإذن','غياب بدون إذن','راحة أسبوعية','يوم بدل راحة','إجازة اعتيادية','إجازة رسمية'];
+
+  mo.innerHTML=`
+  <div class="mb" style="max-width:440px;padding:0">
+    <div style="background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:16px 20px;display:flex;align-items:center;gap:10px">
+      <span class="ms" style="color:#fff;font-size:20px">edit_calendar</span>
+      <div style="flex:1">
+        <div style="font-size:14px;font-weight:800;color:#fff">تعديل سجل الحضور</div>
+        <div style="font-size:11px;color:#7dd8f5">${emp?.nm||'—'} — ${rec.dt}</div>
+      </div>
+      <button onclick="document.getElementById('att-edit-mo').remove()" style="background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:5px;cursor:pointer;color:#fff"><span class="ms">close</span></button>
+    </div>
+    <div style="padding:18px;display:flex;flex-direction:column;gap:12px">
+      <div>
+        <label class="fl">وقت الدخول</label>
+        <input class="fi" id="att-ed-ti" type="time" value="${tiVal}"/>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:2px">الحالي: ${tiVal?formatTime12(tiVal):'—'}</div>
+      </div>
+      <div>
+        <label class="fl">وقت الخروج</label>
+        <input class="fi" id="att-ed-to" type="time" value="${toVal}"/>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:2px">الحالي: ${toVal?formatTime12(toVal):'—'}</div>
+      </div>
+      <div>
+        <label class="fl">الحالة</label>
+        <select class="fi" id="att-ed-st">
+          ${statuses.map(s=>`<option value="${s}" ${rec.st===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="fl">ملاحظة التعديل</label>
+        <input class="fi" id="att-ed-nt" value="${rec.nt||''}" placeholder="سبب التعديل..."/>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+        <button class="btn bg" onclick="document.getElementById('att-edit-mo').remove()">إلغاء</button>
+        <button class="btn bn" onclick="saveAttEdit('${attId}')">
+          <span class="ms ms-sm">save</span>حفظ
+        </button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(mo);
+}
+
+function saveAttEdit(attId){
+  const session = getSession();
+  if(!session || session.role !== 'admin'){ toast('صلاحية مرفوضة','error'); return; }
+  const idx = DB.att.findIndex(a=>a.id===attId);
+  if(idx<0) return;
+
+  const ti = document.getElementById('att-ed-ti')?.value || '';
+  const to = document.getElementById('att-ed-to')?.value || '';
+  const st = document.getElementById('att-ed-st')?.value || DB.att[idx].st;
+  const nt = document.getElementById('att-ed-nt')?.value || '';
+
+  // حساب الساعات
+  let hours = DB.att[idx].hours;
+  let ot = DB.att[idx].ot || 0;
+  if(ti && to){
+    const [h1,m1]=ti.split(':').map(Number);
+    const [h2,m2]=to.split(':').map(Number);
+    const mins=(h2*60+m2)-(h1*60+m1);
+    if(mins > 0){
+      hours = (mins/60).toFixed(1);
+      // أوفرتايم (أكثر من 8 ساعات)
+      const workHrs = mins/60;
+      const stdHrs = Number(DB.rules?.['work_hrs']||8);
+      ot = workHrs > stdHrs ? Number((workHrs-stdHrs).toFixed(1)) : 0;
+    }
+  }
+
+  DB.att[idx] = {
+    ...DB.att[idx],
+    ti: ti||DB.att[idx].ti,
+    to: to||DB.att[idx].to,
+    st, nt, hours, ot,
+    editedBy: session.name,
+    editedAt: new Date().toISOString()
+  };
+
+  sv('att', DB.att);
+  document.getElementById('att-edit-mo')?.remove();
+  logActivity('تعديل سجل حضور', `${DB.emp.find(e=>e.id===DB.att[idx].eid)?.nm} — ${DB.att[idx].dt}`);
+  toast('✅ تم حفظ التعديل','success');
+  renderAtt();
 }
 
 function formatTime12(t){
@@ -2691,7 +2835,47 @@ function importAttCSV(input){
       }
       let added=0,skipped=0;records.forEach(r=>{
         if(!r.eid){skipped++;return;}
-        const exists=DB.att.find(a=>a.eid===r.eid&&a.dt===r.dt);if(!exists){DB.att.push(r);added++;}else skipped++;});sv('att',DB.att);renderAtt();renderDash();toast('✅ استيراد:'+added+' سجل جديد — تجاهل '+skipped+' مكرر','success');input.value='';}catch(err){toast('خطأ في قراءة الملف:'+err.message,'error');}
+        const exists=DB.att.find(a=>a.eid===r.eid&&a.dt===r.dt);
+        if(!exists){
+          DB.att.push(r); added++;
+        } else {
+          // مضاء مزدوج حضور (نفس timeIn) → تجاهل الثاني
+          if(r.ti && exists.ti && r.ti === exists.ti){
+            // لو الثاني عنده timeOut والأول ملوش → نكمل الأول
+            if(r.to && !exists.to){
+              const eIdx=DB.att.indexOf(exists);
+              DB.att[eIdx].to=r.to;
+              added++;
+            } else { skipped++; }
+          }
+          // مضاء مزدوج انصراف (نفس timeOut) → اعتمد الأخير (أو تجاهل)
+          else if(r.to && exists.to && r.to === exists.to){
+            skipped++; // نفس الانصراف — تجاهل
+          }
+          // سجل موجود بدون timeOut → أضف الانصراف
+          else if(!exists.to && (r.to || r.ti)){
+            const eIdx=DB.att.indexOf(exists);
+            const toTime = r.to || r.ti;
+            DB.att[eIdx].to = toTime;
+            if(exists.ti && toTime){
+              const[h1,m1]=exists.ti.split(':').map(Number);
+              const[h2,m2]=toTime.split(':').map(Number);
+              const mins=(h2*60+m2)-(h1*60+m1);
+              if(mins>0) DB.att[eIdx].hours=(mins/60).toFixed(1);
+            }
+            added++;
+          } else { skipped++; }
+        }});
+      // إعادة حساب OT للشيفتات
+      const processed = new Set();
+      DB.att.forEach(rec=>{
+        const key = rec.eid+'_'+rec.dt;
+        if(!processed.has(key)){
+          processed.add(key);
+          recalcDayOT(rec.eid, rec.dt);
+        }
+      });
+      sv('att',DB.att);renderAtt();renderDash();toast('✅ استيراد:'+added+' سجل جديد — تجاهل '+skipped+' مكرر','success');input.value='';}catch(err){toast('خطأ في قراءة الملف:'+err.message,'error');}
   };reader.readAsText(file,'utf-8');}
 
 function findEmpById(code){if(!code)return'';const e=DB.emp.find(x=>String(x.cd)===String(code)||String(x.id)===String(code));return e?e.id:'';}
