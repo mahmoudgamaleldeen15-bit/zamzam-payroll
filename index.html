@@ -93,7 +93,55 @@ html,body{margin:0;padding:0;font-family:'Cairo',sans-serif;background:#f0f4ff;c
 .archive-row:hover{background:#f5f8ff}
 .trend-up{color:#16a34a}.trend-dn{color:#e03131}.trend-eq{color:#94a3b8}
 </style>
-  <link id="pwa-manifest" rel="manifest" href="./manifest.json">
+  <style>
+/* =====================================================
+   تحسينات الموبايل فقط — Section 19
+   ما بعد 768px: عرض الكمبيوتر يفضل زي ما هو تمامًا
+   ===================================================== */
+@media (max-width: 768px){
+  /* منع أي Scroll أفقي عام للصفحة كلها */
+  body:not(.auth-mode){
+    overflow-x: hidden;
+  }
+
+  /* المودالات — تتأكد إنها متتجاوزش عرض الشاشة مهما كان max-width الأصلي */
+  .mb{
+    max-width: calc(100vw - 32px) !important;
+    width: calc(100vw - 32px) !important;
+    max-height: 85vh !important;
+  }
+  .mo{ padding: 10px !important; }
+
+  /* تابات مركز التقارير — Scroll أفقي بدل التفاف عشوائي */
+  #report-tabs{
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    overscroll-behavior-x: contain;
+  }
+  #report-tabs > button{
+    flex: 0 0 auto;
+  }
+
+  /* أي جدول من غير حاوية Scroll — شبكة أمان */
+  .dt{
+    min-width: 640px;
+  }
+
+  /* النماذج ذات العمودين على الكمبيوتر — عمود واحد على الموبايل */
+  .mb [style*="grid-template-columns:1fr 1fr"]{
+    grid-template-columns: 1fr !important;
+  }
+
+  /* أزرار أسفل النماذج — تتوزع بشكل مرتب وتناسب اللمس */
+  .mb button{
+    min-height: 40px;
+  }
+}
+</style>
+<link id="pwa-manifest" rel="manifest" href="./manifest.json">
 </head>
 <body class="auth-mode" style="overflow:hidden">
 <style>
@@ -321,7 +369,7 @@ body.auth-mode {
     </div>
     <button class="btn bg bi" style="position:relative" onclick="showNotifications()">
       <span class="ms">notifications</span>
-      <span style="position:absolute;top:6px;right:6px;width:7px;height:7px;background:#e03131;border-radius:50%;border:1.5px solid #f0f4ff"></span>
+      <span id="notif-dot" style="display:none;position:absolute;top:6px;right:6px;width:7px;height:7px;background:#e03131;border-radius:50%;border:1.5px solid #f0f4ff"></span>
     </button>
     <!-- مؤشر حالة السيرفر -->
     <div id="server-indicator" title="اضغط لتحديث الحضور الآن — يجيب أي بصمة جديدة وأي موظف جديد على الجهاز" onclick="manualSync()"
@@ -783,7 +831,7 @@ body.auth-mode {
   </div>
 
   <!-- Report Tabs -->
-  <div style="display:flex;gap:4px;flex-wrap:wrap;background:#f0f4fc;border-radius:13px;padding:4px;margin-bottom:18px">
+  <div id="report-tabs" style="display:flex;gap:4px;flex-wrap:wrap;background:#f0f4fc;border-radius:13px;padding:4px;margin-bottom:18px">
     <button class="tb on" id="rt-payroll"  onclick="switchReport('payroll')"><span class="ms ms-sm">receipt_long</span> الرواتب</button>
     <button class="tb" id="rt-employees"   onclick="switchReport('employees')"><span class="ms ms-sm">badge</span> الموظفون</button>
     <button class="tb" id="rt-attendance"  onclick="switchReport('attendance')"><span class="ms ms-sm">fingerprint</span> الحضور</button>
@@ -1560,6 +1608,7 @@ const DB={
   draws:JSON.parse(localStorage.getItem('zz_draws')||'[]'),
   leaves:JSON.parse(localStorage.getItem('zz_leaves')||'[]'),
   archives:JSON.parse(localStorage.getItem('zz_archives')||'[]'),
+  issues:JSON.parse(localStorage.getItem('zz_issues')||'[]'),
 };const MAR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const PGS={dashboard:'لوحة التحكم',employees:'الموظفون',payroll:'كشف المرتبات',attendance:'الحضور والأوفرتايم',advances:'السلف والاستقطاعات',draws:'المسحوبات',rent:'الإيجارات الشهرية',formulas:'القواعد والإعدادات',charity:'وحدة الصدقات',reports:'مركز التقارير',leave:'الإجازات الاعتيادية',restdays:'الراحات الأسبوعية',loancheck:'استحقاق السلفة',archive:'الأرشيف'};// =====================================================
 // Firebase Hybrid Sync — زمزم Payroll
 // localStorage (primary) + Firebase (cloud backup/sync)
@@ -1576,7 +1625,7 @@ const FB_CONFIG = {
 };
 
 // الـ DB keys اللي بتتزامن
-const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives'];
+const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives','issues'];
 
 let fbApp = null;
 let fbDB  = null;
@@ -2310,6 +2359,7 @@ function calcSlip(emp){
 
 // ===================== DASHBOARD =====================
 function renderDash(){
+  if(typeof scanAttendanceIssues==='function') scanAttendanceIssues();
   const act=DB.emp.filter(e=>e.st==='نشط');let gr2=0,ded=0,net=0,oth=0;act.forEach(e=>{const p=calcSlip(e);gr2+=p.gross;ded+=p.deduct;net+=p.net;oth+=p.otHrs});const T=DB.emp.length;document.getElementById('k-emp').textContent=act.length;document.getElementById('k-emp-s').textContent=`من أصل ${T} مسجل`;bar('k-emp-b',T>0?act.length/T*100:0);document.getElementById('k-gr').textContent=fc(gr2)+' ج.م';bar('k-gr-b',75);document.getElementById('k-ded').textContent=fc(ded)+' ج.م';bar('k-ded-b',gr2>0?ded/gr2*100:0);document.getElementById('k-ot').textContent=fc(oth)+' ج.م';document.getElementById('k-ot-s').textContent=`${oth.toFixed(1)} ساعة إضافية`;bar('k-ot-b',60);document.getElementById('k-net').textContent=fc(net)+' ج.م';const rentAct=DB.rent.filter(r=>r.status==='نشط');const rentTot=rentAct.reduce((s,r)=>s+Number(r.curr||r.base||0),0);document.getElementById('k-rent').textContent=fc(rentTot)+' ج.م';document.getElementById('k-rent-s').textContent=`${rentAct.length} عقد نشط`;bar('k-rent-b',rentTot>0?70:0);// Dept bars
   const dm={};act.forEach(e=>{const p=calcSlip(e);dm[e.dp]=dm[e.dp]||{n:0,c:0};dm[e.dp].n+=p.net;dm[e.dp].c++});const dl=document.getElementById('dept-list');const depts=Object.entries(dm);if(!depts.length){dl.innerHTML='<div style="text-align:center;padding:22px;color:#94a3b8;font-size:12px"><span class="ms ms-xl" style="display:block;margin-bottom:6px">bar_chart</span>أضف موظفين</div>';return;}
   const mx=Math.max(...depts.map(d=>d[1].n));const cls=['#0f2057','#0ea5a0','#1e3a8a','#d97706','#7c3aed','#e03131'];dl.innerHTML=depts.map(([d,{n,c}],i)=>`
@@ -4362,31 +4412,312 @@ window.addEventListener('appinstalled', () => {
 // إنشاء manifest ديناميكي
 // ===== مزامنة تلقائية عند الفتح =====
 // ===== الإشعارات =====
-function showNotifications(){
-  const alerts = [];
-  // سلف منتهية
-  const endAdv = DB.adv.filter(a=>a.status==='نشط'&&Number(a.rem)<=Number(a.inst));
-  if(endAdv.length) alerts.push({ic:'credit_card',c:'#d97706',txt:`${endAdv.length} سلفة تنتهي هذا الشهر`});
-  // غياب هذا الشهر
-  const absThis = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m&&(a.st==='غياب بدون إذن'));
-  if(absThis.length) alerts.push({ic:'alarm_off',c:'#e03131',txt:`${absThis.length} حالة غياب بدون إذن`});
-  // عقود إيجار للتجديد
-  const now=new Date();
-  const renew=DB.rent.filter(r=>{if(!r.endDate||r.status!=='نشط')return false;const d=(new Date(r.endDate)-now)/(1000*60*60*24);return d>=0&&d<=30;});
-  if(renew.length) alerts.push({ic:'apartment',c:'#7c3aed',txt:`${renew.length} عقد إيجار ينتهي خلال 30 يوم`});
-  // إجازات رصيد منخفض
-  const lowLeave=DB.emp.filter(e=>{const used=DB.leaves.filter(l=>l.eid===e.id&&l.year===DB.cycle.y).reduce((s,l)=>s+l.days,0);return(Number(e.leaveBal||30)-used)<=5;});
-  if(lowLeave.length) alerts.push({ic:'beach_access',c:'#0369a1',txt:`${lowLeave.length} موظف رصيد إجازاتهم أقل من 5 أيام`});
+// =====================================================
+// نظام فحص الغياب والراحة الأسبوعية والإشعارات
+// يعتمد بالكامل على الحقول والبنية الموجودة فعلاً:
+// emp.restDay (0-6 بنفس ترقيم JS Date.getDay())
+// emp.workTime، DB.att، DB.leaves، نظام sv()/Firebase الحالي
+// =====================================================
 
-  if(!alerts.length){
-    toast('لا إشعارات جديدة ✅','info');
+// ===== تاريخ اليوم الفعلي بتوقيت مصر =====
+function getCairoTodayStr(){
+  try{
+    return new Date().toLocaleDateString('en-CA', {timeZone:'Africa/Cairo'});
+  }catch(e){
+    return new Date().toISOString().slice(0,10);
+  }
+}
+
+// ===== فحص شامل لشهر الدورة الحالية — إنشاء راحات تلقائية وإشعارات غياب =====
+// آمن للتكرار: لا يعيد إنشاء أي سجل موجود بالفعل
+function scanAttendanceIssues(){
+  const y = DB.cycle.y, m = DB.cycle.m;
+  const todayStr = getCairoTodayStr();
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const activeEmps = DB.emp.filter(e=>e.st==='نشط');
+
+  let attChanged = false;
+  let issuesChanged = false;
+
+  for(let d=1; d<=daysInMonth; d++){
+    const dt = y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    if(dt > todayStr) break; // متفحصش أيام مستقبلية
+
+    const dow = new Date(y, m-1, d).getDay(); // 0..6 — نفس ترقيم restDay
+
+    activeEmps.forEach(e=>{
+      const restDayNum = (e.restDay!==undefined && e.restDay!=='') ? Number(e.restDay) : -1;
+      const isRestToday = restDayNum>=0 && dow===restDayNum;
+
+      const att = DB.att.find(a=>a.eid===e.id && a.dt===dt);
+      const leaveRec = DB.leaves.find(l=>l.eid===e.id && l.status!=='ملغاة' && l.from<=dt && l.to>=dt);
+      const issueId = 'iss_'+e.id+'_'+dt;
+      const existingIssue = DB.issues.find(i=>i.id===issueId);
+
+      // 1) لو في سجل حضور فعلي أو إجازة تغطي اليوم — مفيش مشكلة، ننظف أي إشعار قديم معلّق
+      if(att || leaveRec){
+        if(existingIssue && existingIssue.status==='pending'){
+          existingIssue.status = 'resolved';
+          existingIssue.action = existingIssue.action || 'auto_matched';
+          existingIssue.resolvedAt = new Date().toISOString();
+          existingIssue.resolvedBy = 'نظام';
+          issuesChanged = true;
+        }
+        return;
+      }
+
+      // 2) يوم الراحة الأسبوعية بدون أي سجل — نسجلها راحة تلقائية
+      if(isRestToday){
+        DB.att.push({
+          id: uid(), eid: e.id, dt, y, m, d,
+          ti:'', to:'', ot:0, ott:'',
+          st:'راحة أسبوعية', nt:'', isLate:false,
+          source:'تلقائي', autoRest:true,
+          createdAt: new Date().toISOString()
+        });
+        attChanged = true;
+        return;
+      }
+
+      // 3) يوم عمل بدون أي سجل — يحتاج مراجعة من المحاسب
+      if(!existingIssue){
+        DB.issues.push({
+          id: issueId, eid: e.id, dt, type:'no_attendance',
+          status:'pending', action:null,
+          createdAt: new Date().toISOString(),
+          createdBy:'نظام',
+          resolvedBy:null, resolvedAt:null,
+          dismissedBy:null, dismissedAt:null
+        });
+        issuesChanged = true;
+      }
+    });
+  }
+
+  if(attChanged) sv('att', DB.att);
+  if(issuesChanged) sv('issues', DB.issues);
+  updateNotifDot();
+}
+
+// ===== عدد الإشعارات المعلّقة (يستخدم في النقطة الحمراء والعداد) =====
+function pendingNotifCount(){
+  const pendingIssues = DB.issues.filter(i=>i.status==='pending').length;
+  const endAdv = DB.adv.filter(a=>a.status==='نشط'&&Number(a.rem)<=Number(a.inst)).length;
+  const absThis = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m&&a.st==='غياب بدون إذن').length;
+  const now = new Date();
+  const renew = DB.rent.filter(r=>{
+    if(!r.endDate||r.status!=='نشط') return false;
+    const dd=(new Date(r.endDate)-now)/(1000*60*60*24);
+    return dd>=0 && dd<=30;
+  }).length;
+  const lowLeave = DB.emp.filter(e=>{
+    const used = DB.leaves.filter(l=>l.eid===e.id&&l.year===DB.cycle.y&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
+    return (Number(e.leaveBal||30)-used) <= 5;
+  }).length;
+  return pendingIssues + endAdv + absThis + renew + lowLeave;
+}
+
+function updateNotifDot(){
+  const dot = document.getElementById('notif-dot');
+  if(!dot) return;
+  const count = pendingNotifCount();
+  dot.style.display = count>0 ? 'block' : 'none';
+}
+
+// ===== تنسيق تاريخ عربي مقروء =====
+function formatArabicDate(dt){
+  const DAYS_F = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+  const MONTHS_F = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const [y,m,d] = dt.split('-').map(Number);
+  const dow = new Date(y,m-1,d).getDay();
+  return DAYS_F[dow] + ' ' + d + ' ' + MONTHS_F[m-1] + ' ' + y;
+}
+
+// ===== عرض لوحة الإشعارات (نفس الجرس الحالي — عرض تفاعلي بدل alert) =====
+function showNotifications(){
+  // فحص فوري عند فتح الجرس (يغطي حالة فتح البرنامج بعد الظهر)
+  scanAttendanceIssues();
+
+  document.getElementById('notif-panel-mo')?.remove();
+  const mo = document.createElement('div');
+  mo.className='mo open'; mo.id='notif-panel-mo';
+  mo.style.cssText='display:flex;z-index:400';
+
+  const session = getSession();
+  const canAct = session && (session.role==='admin' || session.perms?.att_edit);
+
+  // === التنبيهات العامة الموجودة أصلاً ===
+  const alerts = [];
+  const endAdv = DB.adv.filter(a=>a.status==='نشط'&&Number(a.rem)<=Number(a.inst));
+  if(endAdv.length) alerts.push({ic:'credit_card', c:'#d97706', bg:'#fef3c7', txt: endAdv.length+' سلفة تنتهي هذا الشهر'});
+  const absThis = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m&&a.st==='غياب بدون إذن');
+  if(absThis.length) alerts.push({ic:'alarm_off', c:'#e03131', bg:'#ffe5e5', txt: absThis.length+' حالة غياب بدون إذن'});
+  const now2 = new Date();
+  const renew = DB.rent.filter(r=>{ if(!r.endDate||r.status!=='نشط') return false; const dd=(new Date(r.endDate)-now2)/(1000*60*60*24); return dd>=0&&dd<=30; });
+  if(renew.length) alerts.push({ic:'apartment', c:'#7c3aed', bg:'#f0edff', txt: renew.length+' عقد إيجار ينتهي خلال 30 يوم'});
+  const lowLeave = DB.emp.filter(e=>{ const used=DB.leaves.filter(l=>l.eid===e.id&&l.year===DB.cycle.y&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0); return (Number(e.leaveBal||30)-used)<=5; });
+  if(lowLeave.length) alerts.push({ic:'beach_access', c:'#0369a1', bg:'#e0f2fe', txt: lowLeave.length+' موظف رصيد إجازاتهم أقل من 5 أيام'});
+
+  const alertsHtml = alerts.map(a=>(
+    "<div style='display:flex;align-items:center;gap:10px;padding:10px 12px;background:"+a.bg+";border-radius:10px;margin-bottom:8px'>"
+    + "<span class='ms ms-sm' style='color:"+a.c+"'>"+a.ic+"</span>"
+    + "<span style='font-size:12px;font-weight:700;color:#0d1b3e'>"+a.txt+"</span>"
+    + "</div>"
+  )).join('');
+
+  // === إشعارات الغياب المعلّقة ===
+  const pending = DB.issues.filter(i=>i.status==='pending').sort((a,b)=>a.dt.localeCompare(b.dt));
+
+  const issuesHtml = pending.map(iss=>{
+    const emp = DB.emp.find(e=>e.id===iss.eid);
+    const empName = emp ? emp.nm : 'موظف محذوف';
+    const dateArabic = formatArabicDate(iss.dt);
+    const actionsHtml = canAct ? (
+      "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
+      + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest_swap')\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
+      + "<button onclick=\"resolveAttIssue('"+iss.id+"','permitted')\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
+      + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized')\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
+      + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+      + "</div>"
+    ) : "<div style='font-size:11px;color:#94a3b8;margin-top:8px'>لا تملك صلاحية اتخاذ إجراء على هذا التنبيه</div>";
+
+    return (
+      "<div style='background:#fff;border:1px solid #fecaca;border-radius:12px;padding:14px;margin-bottom:10px'>"
+      + "<div style='display:flex;align-items:flex-start;gap:10px'>"
+      +   "<span class='ms' style='color:#e03131;font-size:20px'>warning</span>"
+      +   "<div style='flex:1'>"
+      +     "<div style='font-size:13px;font-weight:800;color:#0f2057'>تنبيه غياب يحتاج إجراء</div>"
+      +     "<div style='font-size:12.5px;color:#4a5982;margin-top:4px'>"
+      +       "الموظف: <strong>"+empName+"</strong><br/>"
+      +       "التاريخ: <strong>"+dateArabic+"</strong><br/>"
+      +       "لم يتم تسجيل حضور أو انصراف — وليس يوم الراحة المحدد له"
+      +     "</div>"
+      +     actionsHtml
+      +   "</div>"
+      +   (canAct ? ("<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' title='إخفاء (تم)' style='background:#f0f4fc;color:#94a3b8;flex-shrink:0'>تم</button>") : "")
+      + "</div>"
+      + "</div>"
+    );
+  }).join('');
+
+  const nothingHtml = "<div style='text-align:center;padding:30px;color:#94a3b8'>لا توجد تنبيهات جديدة ✅</div>";
+
+  mo.innerHTML =
+    "<div class='mb' style='max-width:480px;max-height:88vh;overflow-y:auto;padding:0'>"
+    + "<div style='background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:16px 20px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:5'>"
+    +   "<span class='ms' style='color:#fff;font-size:20px'>notifications</span>"
+    +   "<div style='flex:1'><div style='font-size:14px;font-weight:800;color:#fff'>الإشعارات</div>"
+    +   "<div style='font-size:11px;color:#7dd8f5'>"+(pending.length+alerts.length)+" إشعار</div></div>"
+    +   "<button onclick=\"document.getElementById('notif-panel-mo').remove()\" style='background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff'><span class='ms'>close</span></button>"
+    + "</div>"
+    + "<div style='padding:16px'>"
+    +   (pending.length ? ("<div style='font-size:11px;font-weight:800;color:#e03131;margin-bottom:8px'>تنبيهات غياب تحتاج إجراء ("+pending.length+")</div>"+issuesHtml) : '')
+    +   (alerts.length ? ("<div style='font-size:11px;font-weight:800;color:#94a3b8;margin:"+(pending.length?'16px':'0')+" 0 8px'>تنبيهات عامة</div>"+alertsHtml) : '')
+    +   ((!pending.length && !alerts.length) ? nothingHtml : '')
+    + "</div>"
+    + "</div>";
+
+  document.body.appendChild(mo);
+  updateNotifDot();
+}
+
+// ===== تنفيذ إجراء على تنبيه غياب =====
+function resolveAttIssue(issueId, actionType){
+  const session = getSession();
+  if(!session || !(session.role==='admin' || session.perms?.att_edit)){
+    toast('ليس لديك صلاحية اتخاذ إجراء','error'); return;
+  }
+  const iss = DB.issues.find(i=>i.id===issueId);
+  if(!iss || iss.status!=='pending'){ toast('تم التعامل مع هذا التنبيه بالفعل','info'); return; }
+
+  const emp = DB.emp.find(e=>e.id===iss.eid);
+  if(!emp){ toast('الموظف غير موجود','error'); return; }
+
+  // تحقّق نهائي: هل اتسجل سجل حضور لنفس اليوم من مكان تاني في الوقت ده؟ (منع تعارض)
+  const alreadyAtt = DB.att.find(a=>a.eid===iss.eid && a.dt===iss.dt);
+  if(alreadyAtt){
+    iss.status='resolved'; iss.action='auto_matched'; iss.resolvedAt=new Date().toISOString(); iss.resolvedBy=session.name;
+    sv('issues', DB.issues);
+    toast('تم تسجيل اليوم بالفعل من مكان آخر','info');
+    refreshAfterIssueAction();
     return;
   }
-  // عرض الإشعارات
-  const msg = alerts.map(a=>a.txt).join('\n');
-  alert(`🔔 إشعارات (${alerts.length}):
 
-` + alerts.map((a,i)=>`${i+1}. ${a.txt}`).join('\n'));
+  const statusMap = {
+    rest_swap: 'يوم بدل راحة',
+    permitted: 'غياب بإذن',
+    unauthorized: 'غياب بدون إذن'
+  };
+
+  if(actionType==='leave'){
+    // إجازة اعتيادية — بنفس منطق خصم الرصيد المستخدم في باقي النظام
+    const year = new Date(iss.dt).getFullYear();
+    const used = DB.leaves.filter(l=>l.eid===iss.eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
+    const bal = Number(emp.leaveBal||30);
+    if(used >= bal){ toast('رصيد الإجازات غير كافٍ لهذا الموظف','error'); return; }
+
+    DB.att.push({
+      id: uid(), eid: iss.eid, dt: iss.dt,
+      y: year, m: new Date(iss.dt).getMonth()+1, d: new Date(iss.dt).getDate(),
+      ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'من إشعار الغياب',
+      isLate:false, createdAt:new Date().toISOString()
+    });
+
+    const lid = 'lv_att_'+DB.att[DB.att.length-1].id;
+    if(!DB.leaves.find(l=>l.id===lid)){
+      DB.leaves.push({
+        id: lid, eid: iss.eid, from: iss.dt, to: iss.dt, days: 1,
+        year, month: new Date(iss.dt).getMonth()+1, status:'معتمدة',
+        note:'من إشعار الغياب', reqDate: new Date().toISOString().slice(0,10),
+        createdAt: new Date().toISOString()
+      });
+    }
+    sv('leaves', DB.leaves);
+  } else {
+    const newStatus = statusMap[actionType];
+    if(!newStatus){ toast('إجراء غير معروف','error'); return; }
+    DB.att.push({
+      id: uid(), eid: iss.eid, dt: iss.dt,
+      y: Number(iss.dt.slice(0,4)), m: Number(iss.dt.slice(5,7)), d: Number(iss.dt.slice(8,10)),
+      ti:'', to:'', ot:0, ott:'', st:newStatus, nt:'من إشعار الغياب',
+      isLate:false, createdAt:new Date().toISOString()
+    });
+  }
+
+  sv('att', DB.att);
+
+  iss.status='resolved'; iss.action=actionType; iss.resolvedAt=new Date().toISOString(); iss.resolvedBy=session.name;
+  sv('issues', DB.issues);
+
+  logActivity('معالجة تنبيه غياب', emp.nm+' — '+iss.dt+' — '+actionType);
+  toast('✅ تم تسجيل الإجراء بنجاح','success');
+
+  refreshAfterIssueAction();
+}
+
+// ===== إخفاء تنبيه بدون إجراء (زر تم) =====
+function dismissAttIssue(issueId){
+  const session = getSession();
+  if(!session || !(session.role==='admin' || session.perms?.att_edit)){
+    toast('ليس لديك صلاحية','error'); return;
+  }
+  const iss = DB.issues.find(i=>i.id===issueId);
+  if(!iss || iss.status!=='pending') return;
+  iss.status='dismissed'; iss.dismissedBy=session.name; iss.dismissedAt=new Date().toISOString();
+  sv('issues', DB.issues);
+  refreshAfterIssueAction();
+}
+
+// ===== تحديث الواجهة بعد أي إجراء على تنبيه =====
+function refreshAfterIssueAction(){
+  if(typeof renderDash==='function') renderDash();
+  if(typeof renderAtt==='function') renderAtt();
+  if(typeof renderPay==='function') renderPay();
+  if(typeof renderLeave==='function') renderLeave();
+  updateNotifDot();
+  // إعادة فتح لوحة الإشعارات محدّثة
+  const wasOpen = document.getElementById('notif-panel-mo');
+  if(wasOpen){ wasOpen.remove(); showNotifications(); }
 }
 
 // ===== مؤشر حالة السيرفر =====
