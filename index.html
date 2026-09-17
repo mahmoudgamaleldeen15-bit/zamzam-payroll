@@ -95,12 +95,11 @@ html,body{margin:0;padding:0;font-family:'Cairo',sans-serif;background:#f0f4ff;c
 </style>
   <link id="pwa-manifest" rel="manifest" href="./manifest.json">
 </head>
-<body style="overflow:hidden">
+<body class="auth-mode" style="overflow:hidden">
 <style>
 /* إخفاء كل حاجة ورا auth-overlay */
 body.auth-mode > *:not(#auth-overlay):not(#admin-mo):not([class~="mo"]):not(style) {
-  visibility: hidden !important;
-  pointer-events: none !important;
+  display: none !important;
 }
 body.auth-mode {
   overflow: hidden !important;
@@ -262,6 +261,7 @@ body.auth-mode {
     <a class="ni" data-p="formulas" href="#formulas" onclick="go('formulas');return false"><span class="ms">tune</span>القواعد والإعدادات</a>
     <div style="font-size:10px;font-weight:800;color:#94a3b8;padding:10px 10px 4px;text-transform:uppercase;letter-spacing:.06em;margin-top:4px">التقارير</div>
     <a class="ni" data-p="reports" href="#reports" onclick="go('reports');return false"><span class="ms">assessment</span>مركز التقارير</a>
+    <a class="ni" data-p="archive" href="#archive" onclick="go('archive');return false"><span class="ms">inventory_2</span>الأرشيف</a>
     <div style="font-size:10px;font-weight:800;color:#94a3b8;padding:12px 10px 4px;text-transform:uppercase;letter-spacing:.06em;margin-top:4px">المسؤولية المجتمعية</div>
     <a class="ni" data-p="leave" href="#leave" onclick="go('leave');return false"><span class="ms">beach_access</span>الإجازات الاعتيادية</a>
     <a class="ni" data-p="restdays" href="#restdays" onclick="go('restdays');return false"><span class="ms">event_available</span>الراحات الأسبوعية</a>
@@ -324,7 +324,7 @@ body.auth-mode {
       <span style="position:absolute;top:6px;right:6px;width:7px;height:7px;background:#e03131;border-radius:50%;border:1.5px solid #f0f4ff"></span>
     </button>
     <!-- مؤشر حالة السيرفر -->
-    <div id="server-indicator" title="حالة سيرفر البصمة" onclick="manualSync()"
+    <div id="server-indicator" title="اضغط لتحديث الحضور الآن — يجيب أي بصمة جديدة وأي موظف جديد على الجهاز" onclick="manualSync()"
       style="display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:9px;background:#f0f4fc;border:1px solid #dde3f0;cursor:pointer;transition:.15s;user-select:none"
       onmouseover="this.style.background='#e8ecf8'" onmouseout="this.style.background='#f0f4fc'">
       <span id="server-dot" style="width:9px;height:9px;border-radius:50%;background:#94a3b8;flex-shrink:0;transition:all .3s"></span>
@@ -796,6 +796,38 @@ body.auth-mode {
 
   <!-- Report Content -->
   <div id="report-content"></div>
+</div>
+
+<!-- ===== ARCHIVE PAGE (الأرشيف) ===== -->
+<div id="page-archive" class="page" style="padding:22px">
+
+  <!-- Header -->
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:22px">
+    <div>
+      <h1 style="font-size:20px;font-weight:800;color:#0f2057;margin:0 0 4px">الأرشيف</h1>
+      <div style="font-size:12px;color:#94a3b8">أرشفة شهرية وسنوية — نسخة مجمّدة من بيانات الفترة للاطلاع والمراجعة فقط، بدون أي تأثير على النظام الحالي</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn bn" onclick="archiveCurrentMonthFull()"><span class="ms ms-sm">archive</span>أرشفة الشهر الحالي</button>
+      <button class="btn bg" onclick="archiveCurrentYear()"><span class="ms ms-sm">calendar_month</span>أرشفة سنوية</button>
+    </div>
+  </div>
+
+  <!-- تنبيه توضيحي -->
+  <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:12px;padding:12px 16px;margin-bottom:18px;display:flex;align-items:center;gap:10px">
+    <span class="ms" style="color:#4338ca">info</span>
+    <div style="font-size:12px;color:#3730a3">الأرشفة تعمل "نسخة" من بيانات الشهر/السنة وتجمّدها كما هي وقت الأرشفة. عرض أرشيف قديم لن يعدّل أو يحذف أي بيانات حالية أبداً — للعرض والمراجعة فقط.</div>
+  </div>
+
+  <!-- فلتر السنة -->
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+    <label class="fl" style="margin:0">السنة</label>
+    <select class="fi" id="arc-year-filter" style="width:auto" onchange="renderArchivePage()"></select>
+  </div>
+
+  <!-- قائمة الأرشيفات -->
+  <div id="archive-list" style="display:flex;flex-direction:column;gap:10px"></div>
+
 </div>
 
 <!-- ===== LEAVE PAGE (الإجازات الاعتيادية) ===== -->
@@ -1527,7 +1559,8 @@ const DB={
   cycle:JSON.parse(localStorage.getItem('zz_cycle')||`{"y":${new Date().getFullYear()},"m":${new Date().getMonth()+1}}`),
   draws:JSON.parse(localStorage.getItem('zz_draws')||'[]'),
   leaves:JSON.parse(localStorage.getItem('zz_leaves')||'[]'),
-};const MAR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const PGS={dashboard:'لوحة التحكم',employees:'الموظفون',payroll:'كشف المرتبات',attendance:'الحضور والأوفرتايم',advances:'السلف والاستقطاعات',draws:'المسحوبات',rent:'الإيجارات الشهرية',formulas:'القواعد والإعدادات',charity:'وحدة الصدقات',reports:'مركز التقارير',leave:'الإجازات الاعتيادية',restdays:'الراحات الأسبوعية',loancheck:'استحقاق السلفة'};// =====================================================
+  archives:JSON.parse(localStorage.getItem('zz_archives')||'[]'),
+};const MAR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const PGS={dashboard:'لوحة التحكم',employees:'الموظفون',payroll:'كشف المرتبات',attendance:'الحضور والأوفرتايم',advances:'السلف والاستقطاعات',draws:'المسحوبات',rent:'الإيجارات الشهرية',formulas:'القواعد والإعدادات',charity:'وحدة الصدقات',reports:'مركز التقارير',leave:'الإجازات الاعتيادية',restdays:'الراحات الأسبوعية',loancheck:'استحقاق السلفة',archive:'الأرشيف'};// =====================================================
 // Firebase Hybrid Sync — زمزم Payroll
 // localStorage (primary) + Firebase (cloud backup/sync)
 // =====================================================
@@ -1543,7 +1576,7 @@ const FB_CONFIG = {
 };
 
 // الـ DB keys اللي بتتزامن
-const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves'];
+const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives'];
 
 let fbApp = null;
 let fbDB  = null;
@@ -1976,7 +2009,7 @@ function bar(id,pct){const b=document.getElementById(id);if(b)setTimeout(()=>b.s
 
 // ===================== ROUTER =====================
 function go(p){
-  if(!PGS[p])p='dashboard';document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));const el=document.getElementById('page-'+p);if(el)el.classList.add('active');document.querySelectorAll('.ni').forEach(a=>a.classList.toggle('on',a.dataset.p===p));document.getElementById('bc').textContent=PGS[p];if(location.hash!=='#'+p)history.pushState(null,'','#'+p);closeMob();const R={dashboard:renderDash,employees:renderEmp,payroll:renderPay,attendance:renderAtt,advances:renderAdv,draws:renderDraws,rent:renderRent,formulas:loadRules,charity:renderChr,reports:()=>renderReport(currentReport),leave:renderLeave,restdays:renderRestDays,loancheck:initLoanCheck};if(R[p])R[p]();if(p==='reports')renderReport(currentReport);}
+  if(!PGS[p])p='dashboard';document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));const el=document.getElementById('page-'+p);if(el)el.classList.add('active');document.querySelectorAll('.ni').forEach(a=>a.classList.toggle('on',a.dataset.p===p));document.getElementById('bc').textContent=PGS[p];if(location.hash!=='#'+p)history.pushState(null,'','#'+p);closeMob();const R={dashboard:renderDash,employees:renderEmp,payroll:renderPay,attendance:renderAtt,advances:renderAdv,draws:renderDraws,rent:renderRent,formulas:loadRules,charity:renderChr,reports:()=>renderReport(currentReport),leave:renderLeave,restdays:renderRestDays,loancheck:initLoanCheck,archive:renderArchivePage};if(R[p])R[p]();if(p==='reports')renderReport(currentReport);}
 window.addEventListener('hashchange',()=>go(location.hash.replace('#','')||'dashboard'));// ===================== MOBILE =====================
 function toggleMob(){document.getElementById('sb').classList.toggle('mobile-open');document.getElementById('sb-overlay').classList.toggle('open')}
 function closeMob(){document.getElementById('sb').classList.remove('mobile-open');document.getElementById('sb-overlay').classList.remove('open')}
@@ -4420,10 +4453,10 @@ async function autoSyncOnOpen(){
   // نتحقق من آخر مزامنة
   const lastSync = localStorage.getItem('zz_last_sync');
   const today = new Date().toDateString();
-  
-  // لو مزامنة اليوم اتعملت — لا تعمل تاني
+
+  // لو مزامنة اليوم اتعملت — لا تعمل تاني (تلقائيًا بس، الضغط اليدوي بيتخطى ده)
   if(lastSync === today) return;
-  
+
   // نتحقق من السيرفر بصمت
   try {
     const res = await fetch('http://localhost:7788/ping', {
@@ -4432,54 +4465,88 @@ async function autoSyncOnOpen(){
     const data = await res.json();
     updateServerIndicator(true);
     if(data.status !== 'ok'){updateServerIndicator(false);return;}
-    
+
     // السيرفر شغال — نعمل مزامنة تلقائية
     console.log('🔄 مزامنة تلقائية...');
-    
-    // نجيب بيانات إمبارح والنهارده
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate()-1);
-    const yYear = yesterday.getFullYear();
-    const yMonth = yesterday.getMonth()+1;
-    
+
     // نجيب الشهر الحالي
     const syncRes = await fetch(
       `http://localhost:7788/fetch?year=${DB.cycle.y}&month=${DB.cycle.m}`,
       {signal: AbortSignal.timeout(30000)}
     );
     const syncData = await syncRes.json();
-    
+
     if(syncData.status !== 'success' || !syncData.records?.length) return;
-    
-    let added = 0;
+
+    let added = 0, updated = 0, preserved = 0, newEmps = 0;
+
+    // ===== 1) استيراد أي موظف جديد موجود على جهاز البصمة وغير موجود في النظام =====
+    // (نفس منطق المطابقة المرنة المستخدم في باقي أماكن الاستيراد — بدون التأثير
+    //  على أي موظف موجود بالفعل، وبدون اسم فاضي)
+    const empMap={};
+    syncData.records.forEach(r=>{ if(r.empCode && !empMap[r.empCode]) empMap[r.empCode]=r.empName; });
+    Object.entries(empMap).forEach(([code,name])=>{
+      const codeN = String(code).trim();
+      const exists = DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase());
+      if(!exists){
+        const safeName = (name && String(name).trim()) ? String(name).trim() : ('موظف '+codeN);
+        DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل (1.5×)',ins:'غير مشمول',insAmt:0,st:'نشط'});
+        newEmps++;
+      }
+    });
+    if(newEmps>0){ sv('emp',DB.emp); renderEmp(); }
+
+    // ===== 2) تحديث/إضافة الحضور — مع الحفاظ على أي يوم اتعدّل يدويًا =====
     syncData.records.forEach(r=>{
-      const emp = DB.emp.find(e=>e.cd===r.empCode);
+      const emp = DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===String(r.empCode||'').trim().toLowerCase());
       if(!emp) return;
       const eid = emp.id;
-      // تحديث أو إضافة — السجل الجديد يحل محل القديم
       const existIdx = DB.att.findIndex(a=>a.eid===eid&&a.dt===r.date);
-      const rec = {
-        id: r.id||uid(), eid,
-        dt:r.date, y:r.year, m:r.month, d:r.day,
-        ti:r.timeIn, to:r.timeOut,
-        ot:Number(r.ot||0), ott:'عادي (1.5×)',
-        st:r.status||'حضور', nt:'مزامنة تلقائية', isLate:false
-      };
-      if(existIdx>=0) DB.att[existIdx]=rec;
-      else { DB.att.push(rec); added++; }
+
+      if(existIdx>=0){
+        const old = DB.att[existIdx];
+        // لو اليوم اتعدّل أو اتحوّل يدويًا (من كشف المرتبات أو تعديل الحضور)
+        // منسيبوش المزامنة التلقائية تلغي التعديل
+        if(old.convertedBy || old.editedBy){
+          preserved++;
+          return;
+        }
+        // تحديث سجل تلقائي عادي بأحدث بيانات من الجهاز
+        DB.att[existIdx] = {
+          ...old,
+          ti:r.timeIn, to:r.timeOut,
+          ot:Number(r.ot||0),
+          st:r.status||'حضور', nt:'مزامنة تلقائية'
+        };
+        updated++;
+      } else {
+        DB.att.push({
+          id: r.id||uid(), eid,
+          dt:r.date, y:r.year, m:r.month, d:r.day,
+          ti:r.timeIn, to:r.timeOut,
+          ot:Number(r.ot||0), ott:'عادي (1.5×)',
+          st:r.status||'حضور', nt:'مزامنة تلقائية', isLate:false
+        });
+        added++;
+      }
     });
-    
-    if(added>0){
+
+    if(added>0 || updated>0){
       sv('att',DB.att);
       renderDash();
-      // حفظ وقت آخر مزامنة
-      localStorage.setItem('zz_last_sync', today);
-      localStorage.setItem('zz_last_sync_count', added);
-      toast(`🔄 مزامنة تلقائية: ${added} سجل جديد من البصمة`,'success');
-    } else {
-      localStorage.setItem('zz_last_sync', today);
     }
-    
+
+    localStorage.setItem('zz_last_sync', today);
+    localStorage.setItem('zz_last_sync_count', added);
+
+    // رسالة توضح فعليًا إيه اللي اتعمل
+    const parts = [];
+    if(newEmps)  parts.push(`👤 ${newEmps} موظف جديد`);
+    if(added)    parts.push(`➕ ${added} حضور جديد`);
+    if(updated)  parts.push(`🔄 ${updated} تحديث`);
+    if(preserved) parts.push(`🔒 ${preserved} يوم معدّل محفوظ كما هو`);
+    if(parts.length) toast('البصمة: '+parts.join(' — '),'success');
+
   } catch(e) {
     // السيرفر مش شغال — لا تعمل حاجة بصمت
     // server not reachable — skip;
@@ -4712,6 +4779,285 @@ function renderReport(type){
   };if(handlers[type]) handlers[type](el);}
 
 // ===== كارت KPI مشترك =====
+// =====================================================
+// نظام الأرشيف — أرشفة شهرية/سنوية للعرض والمراجعة فقط
+// الأرشفة = نسخة مجمّدة (snapshot) من البيانات، لا تؤثر
+// إطلاقاً على DB الحية، وعرضها لا يكتب أي شيء مرة أخرى
+// =====================================================
+
+// ===== أرشفة الشهر الحالي كاملاً =====
+function archiveCurrentMonthFull(){
+  const session = getSession();
+  if(!session || session.role!=='admin'){ toast('الأرشفة للأدمن فقط','error'); return; }
+
+  const y = DB.cycle.y, m = DB.cycle.m;
+  const label = MAR[m-1]+' '+y;
+
+  if(!confirm('سيتم أخذ نسخة مجمّدة من بيانات '+label+' الآن.\nلو فيه أرشيف سابق لنفس الشهر هيتم استبداله بأحدث نسخة.\nمتابعة؟')) return;
+
+  const existingIdx = DB.archives.findIndex(a=>a.type==='monthly'&&a.y===y&&a.m===m);
+
+  const empSnapshot  = DB.emp.map(e=>({...e}));
+  const activeEmps   = DB.emp.filter(e=>e.st==='نشط');
+  const payrollSlips = activeEmps.map(e=>{
+    const slip = calcSlip(e);
+    return Object.assign({eid:e.id, nm:e.nm, cd:e.cd, dp:e.dp||'—'}, slip);
+  });
+
+  const totGross = payrollSlips.reduce((s,p)=>s+(p.gross||0),0);
+  const totNet   = payrollSlips.reduce((s,p)=>s+(p.net||0),0);
+  const totDed   = payrollSlips.reduce((s,p)=>s+(p.deduct||0),0);
+
+  const mm = String(m).padStart(2,'0');
+  const attSnapshot    = DB.att.filter(a=>a.y===y&&a.m===m).map(a=>({...a}));
+  const advSnapshot    = DB.adv.filter(a=>a.status!=='مسددة'||true).map(a=>({...a})); // كل السلف كحالتها وقت الأرشفة
+  const drawsSnapshot  = DB.draws.filter(d=>d.dt&&d.dt.startsWith(y+'-'+mm)).map(d=>({...d}));
+  const chrSnapshot    = DB.chr.filter(c=>c.y===y&&c.m===m).map(c=>({...c}));
+  const leavesSnapshot = DB.leaves.filter(l=>l.year===y&&l.month===m).map(l=>({...l}));
+  const rentSnapshot   = DB.rent.map(r=>({...r}));
+
+  const arc = {
+    id: existingIdx>=0 ? DB.archives[existingIdx].id : uid(),
+    type: 'monthly', y, m, label,
+    archivedAt: new Date().toISOString(),
+    archivedBy: session.name,
+    totals: { gross: totGross, net: totNet, deduct: totDed, empCount: activeEmps.length },
+    snapshot: {
+      emp: empSnapshot, payrollSlips,
+      att: attSnapshot, adv: advSnapshot, draws: drawsSnapshot,
+      chr: chrSnapshot, leaves: leavesSnapshot, rent: rentSnapshot,
+      rules: Object.assign({}, DB.rules)
+    }
+  };
+
+  if(existingIdx>=0) DB.archives[existingIdx]=arc; else DB.archives.push(arc);
+  sv('archives', DB.archives);
+  logActivity('أرشفة شهرية', label);
+  toast('✅ تم أرشفة '+label+' بنجاح','success');
+  renderArchivePage();
+}
+
+// ===== أرشفة سنوية (تجميع من الأرشيفات الشهرية الموجودة) =====
+function archiveCurrentYear(){
+  const session = getSession();
+  if(!session || session.role!=='admin'){ toast('الأرشفة للأدمن فقط','error'); return; }
+
+  const y = DB.cycle.y;
+  const monthlyOfYear = DB.archives.filter(a=>a.type==='monthly'&&a.y===y);
+
+  if(!monthlyOfYear.length){
+    toast('لا يوجد أي أرشيف شهري لسنة '+y+' بعد — أرشف الشهور أولاً','error');
+    return;
+  }
+
+  const missing = [];
+  for(let mi=1; mi<=12; mi++){
+    if(!monthlyOfYear.find(a=>a.m===mi)) missing.push(MAR[mi-1]);
+  }
+  if(missing.length && !confirm('الشهور دي لسه ماتعملهاش أرشفة: '+missing.join('، ')+'.\nهيتم عمل الأرشيف السنوي بالشهور المتاحة فقط ('+monthlyOfYear.length+' شهر). متابعة؟')) return;
+
+  const monthsSummary = monthlyOfYear
+    .sort((a,b)=>a.m-b.m)
+    .map(a=>({ m:a.m, label:a.label, gross:a.totals.gross, net:a.totals.net, deduct:a.totals.deduct, empCount:a.totals.empCount }));
+
+  const totGross = monthsSummary.reduce((s,x)=>s+x.gross,0);
+  const totNet   = monthsSummary.reduce((s,x)=>s+x.net,0);
+  const totDed   = monthsSummary.reduce((s,x)=>s+x.deduct,0);
+
+  // إجمالي سنوي لكل موظف (من كشوفات الشهور المؤرشفة)
+  const empYearly = {};
+  monthlyOfYear.forEach(arc=>{
+    (arc.snapshot.payrollSlips||[]).forEach(p=>{
+      if(!empYearly[p.eid]) empYearly[p.eid] = { nm:p.nm, cd:p.cd, dp:p.dp, months:0, gross:0, net:0, deduct:0 };
+      empYearly[p.eid].months++;
+      empYearly[p.eid].gross  += (p.gross||0);
+      empYearly[p.eid].net    += (p.net||0);
+      empYearly[p.eid].deduct += (p.deduct||0);
+    });
+  });
+
+  const existingIdx = DB.archives.findIndex(a=>a.type==='yearly'&&a.y===y);
+  const arc = {
+    id: existingIdx>=0 ? DB.archives[existingIdx].id : uid(),
+    type: 'yearly', y, m: null, label: y+' (سنوي)',
+    archivedAt: new Date().toISOString(),
+    archivedBy: session.name,
+    totals: { gross: totGross, net: totNet, deduct: totDed, monthsCount: monthlyOfYear.length },
+    snapshot: { monthsSummary, empYearly: Object.values(empYearly) }
+  };
+
+  if(existingIdx>=0) DB.archives[existingIdx]=arc; else DB.archives.push(arc);
+  sv('archives', DB.archives);
+  logActivity('أرشفة سنوية', String(y));
+  toast('✅ تم عمل الأرشيف السنوي لـ '+y+' بنجاح','success');
+  renderArchivePage();
+}
+
+// ===== عرض صفحة الأرشيف =====
+function renderArchivePage(){
+  // تعبئة فلتر السنة
+  const yearsSet = new Set(DB.archives.map(a=>a.y));
+  yearsSet.add(DB.cycle.y);
+  const years = Array.from(yearsSet).sort((a,b)=>b-a);
+  const yearSel = document.getElementById('arc-year-filter');
+  if(yearSel){
+    const curVal = yearSel.value || String(DB.cycle.y);
+    yearSel.innerHTML = years.map(y=>'<option value="'+y+'">'+y+'</option>').join('');
+    if(years.map(String).includes(curVal)) yearSel.value = curVal;
+  }
+  const filterYear = Number(yearSel?.value || DB.cycle.y);
+
+  const list = DB.archives.filter(a=>a.y===filterYear).sort((a,b)=>{
+    if(a.type!==b.type) return a.type==='yearly' ? -1 : 1;
+    return (b.m||0)-(a.m||0);
+  });
+
+  const el = document.getElementById('archive-list');
+  if(!el) return;
+
+  if(!list.length){
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:#94a3b8;background:#fff;border-radius:14px;border:1px solid #eaeffa">لا يوجد أرشيف لسنة '+filterYear+' بعد</div>';
+    return;
+  }
+
+  el.innerHTML = list.map(a=>{
+    const isYearly = a.type==='yearly';
+    const icon = isYearly ? 'calendar_month' : 'archive';
+    const badgeBg = isYearly ? '#f0edff' : '#eef2ff';
+    const badgeColor = isYearly ? '#7c3aed' : '#0f2057';
+    const empCountTxt = isYearly ? (a.totals.monthsCount+' شهر مؤرشف') : (a.totals.empCount+' موظف');
+    return '<div style="background:#fff;border-radius:14px;padding:16px 18px;border:1px solid #eaeffa;display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
+      + '<div style="width:44px;height:44px;border-radius:12px;background:'+badgeBg+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+      +   '<span class="ms" style="color:'+badgeColor+'">'+icon+'</span>'
+      + '</div>'
+      + '<div style="flex:1;min-width:160px">'
+      +   '<div style="font-size:14px;font-weight:800;color:#0f2057">'+a.label+'</div>'
+      +   '<div style="font-size:11px;color:#94a3b8">'+empCountTxt+' — أُرشف في '+new Date(a.archivedAt).toLocaleDateString('ar-EG')+' بواسطة '+(a.archivedBy||'—')+'</div>'
+      + '</div>'
+      + '<div style="text-align:left;min-width:120px">'
+      +   '<div style="font-size:10px;color:#94a3b8">صافي إجمالي</div>'
+      +   '<div style="font-size:15px;font-weight:800;color:#16a34a">'+fc(a.totals.net)+' ج.م</div>'
+      + '</div>'
+      + '<div style="display:flex;gap:6px">'
+      +   ("<button class='btn bn bs' onclick=\"viewArchive('"+a.id+"')\"><span class='ms ms-sm'>visibility</span>عرض</button>")
+      +   ("<button class='btn bg bs' onclick=\"deleteArchive('"+a.id+"')\" style='background:#fff0f0;color:#e03131'><span class='ms ms-sm'>delete</span></button>")
+      + '</div>'
+    + '</div>';
+  }).join('');
+}
+
+// ===== حذف أرشيف =====
+function deleteArchive(id){
+  const session = getSession();
+  if(!session || session.role!=='admin'){ toast('صلاحية مرفوضة','error'); return; }
+  if(!confirm('حذف هذا الأرشيف نهائياً؟ (البيانات الحالية في النظام لن تتأثر)')) return;
+  DB.archives = DB.archives.filter(a=>a.id!==id);
+  sv('archives', DB.archives);
+  toast('تم حذف الأرشيف','success');
+  renderArchivePage();
+}
+
+// ===== عرض أرشيف (للاطلاع فقط — لا يكتب أي شيء في DB) =====
+function viewArchive(id){
+  const arc = DB.archives.find(a=>a.id===id);
+  if(!arc){ toast('الأرشيف غير موجود','error'); return; }
+
+  document.getElementById('archive-view-mo')?.remove();
+  const mo = document.createElement('div');
+  mo.className='mo open'; mo.id='archive-view-mo';
+  mo.style.cssText='display:flex;z-index:500';
+
+  let bodyHtml = '';
+
+  if(arc.type==='monthly'){
+    const slips = arc.snapshot.payrollSlips||[];
+    const rows = slips.map((p,i)=>(
+      '<tr style="background:'+(i%2?'#fafbff':'#fff')+'">'
+      + '<td style="color:#94a3b8;font-size:11px">'+(i+1)+'</td>'
+      + '<td style="font-weight:700">'+p.nm+'<br/><span style="font-size:10px;color:#94a3b8">'+(p.cd||'')+'</span></td>'
+      + '<td><span style="background:#eef2ff;color:#0f2057;border-radius:6px;padding:2px 7px;font-size:11px">'+(p.dp||'—')+'</span></td>'
+      + '<td style="text-align:left">'+fc(p.gross)+'</td>'
+      + '<td style="text-align:left;color:#e03131">'+fc(p.deduct)+'</td>'
+      + '<td style="text-align:left;font-weight:800;color:#16a34a">'+fc(p.net)+'</td>'
+      + '</tr>'
+    )).join('');
+
+    bodyHtml =
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">'
+        + kpiCard('payments','إجمالي Gross',fc(arc.totals.gross)+' ج.م','#0369a1','#e0f2fe')
+        + kpiCard('remove_circle','إجمالي الخصومات',fc(arc.totals.deduct)+' ج.م','#e03131','#ffe5e5')
+        + kpiCard('account_balance_wallet','صافي المرتبات',fc(arc.totals.net)+' ج.م','#16a34a','#dcfce7')
+        + kpiCard('groups','عدد الموظفين',arc.totals.empCount+' موظف','#0f2057','#eef2ff')
+      + '</div>'
+      + '<div style="overflow-x:auto;border:1px solid #eaeffa;border-radius:12px"><table class="dt">'
+        + '<thead><tr><th>#</th><th>الموظف</th><th>القسم</th><th style="text-align:left">إجمالي</th><th style="text-align:left">خصومات</th><th style="text-align:left">الصافي</th></tr></thead>'
+        + '<tbody>'+(rows||'<tr><td colspan="6" style="text-align:center;padding:20px;color:#94a3b8">لا يوجد بيانات</td></tr>')+'</tbody>'
+      + '</table></div>'
+      + '<div style="margin-top:14px;font-size:11px;color:#94a3b8;display:flex;gap:16px;flex-wrap:wrap">'
+        + '<span>📅 أيام حضور مسجّلة: '+(arc.snapshot.att||[]).length+'</span>'
+        + '<span>💳 سلف: '+(arc.snapshot.adv||[]).length+'</span>'
+        + '<span>💰 مسحوبات هذا الشهر: '+(arc.snapshot.draws||[]).length+'</span>'
+        + '<span>🕌 صدقات: '+(arc.snapshot.chr||[]).length+'</span>'
+        + '<span>🏖️ إجازات: '+(arc.snapshot.leaves||[]).length+' يوم</span>'
+      + '</div>';
+  } else {
+    // أرشيف سنوي
+    const ms = arc.snapshot.monthsSummary||[];
+    const monthRows = ms.map(x=>(
+      '<tr><td style="font-weight:700">'+x.label+'</td>'
+      + '<td style="text-align:left">'+fc(x.gross)+'</td>'
+      + '<td style="text-align:left;color:#e03131">'+fc(x.deduct)+'</td>'
+      + '<td style="text-align:left;font-weight:800;color:#16a34a">'+fc(x.net)+'</td>'
+      + '<td style="text-align:center">'+x.empCount+'</td></tr>'
+    )).join('');
+
+    const ey = (arc.snapshot.empYearly||[]).sort((a,b)=>b.net-a.net);
+    const empRows = ey.map((e,i)=>(
+      '<tr style="background:'+(i%2?'#fafbff':'#fff')+'">'
+      + '<td style="font-weight:700">'+e.nm+'<br/><span style="font-size:10px;color:#94a3b8">'+(e.cd||'')+'</span></td>'
+      + '<td>'+e.dp+'</td>'
+      + '<td style="text-align:center">'+e.months+' شهر</td>'
+      + '<td style="text-align:left">'+fc(e.gross)+'</td>'
+      + '<td style="text-align:left;font-weight:800;color:#16a34a">'+fc(e.net)+'</td>'
+      + '</tr>'
+    )).join('');
+
+    bodyHtml =
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">'
+        + kpiCard('payments','إجمالي Gross السنوي',fc(arc.totals.gross)+' ج.م','#0369a1','#e0f2fe')
+        + kpiCard('remove_circle','إجمالي الخصومات',fc(arc.totals.deduct)+' ج.م','#e03131','#ffe5e5')
+        + kpiCard('account_balance_wallet','صافي المرتبات السنوي',fc(arc.totals.net)+' ج.م','#16a34a','#dcfce7')
+        + kpiCard('calendar_month','الشهور المؤرشفة',arc.totals.monthsCount+' شهر','#0f2057','#eef2ff')
+      + '</div>'
+      + '<div style="font-size:12px;font-weight:800;color:#0f2057;margin-bottom:8px">تفصيل شهري</div>'
+      + '<div style="overflow-x:auto;border:1px solid #eaeffa;border-radius:12px;margin-bottom:18px"><table class="dt">'
+        + '<thead><tr><th>الشهر</th><th style="text-align:left">إجمالي</th><th style="text-align:left">خصومات</th><th style="text-align:left">الصافي</th><th style="text-align:center">موظفون</th></tr></thead>'
+        + '<tbody>'+monthRows+'</tbody>'
+      + '</table></div>'
+      + '<div style="font-size:12px;font-weight:800;color:#0f2057;margin-bottom:8px">إجمالي كل موظف خلال السنة</div>'
+      + '<div style="overflow-x:auto;border:1px solid #eaeffa;border-radius:12px"><table class="dt">'
+        + '<thead><tr><th>الموظف</th><th>القسم</th><th style="text-align:center">شهور</th><th style="text-align:left">إجمالي</th><th style="text-align:left">الصافي</th></tr></thead>'
+        + '<tbody>'+(empRows||'<tr><td colspan="5" style="text-align:center;padding:20px;color:#94a3b8">لا يوجد بيانات</td></tr>')+'</tbody>'
+      + '</table></div>';
+  }
+
+  mo.innerHTML =
+    '<div class="mb" style="max-width:900px;max-height:92vh;overflow-y:auto;padding:0">'
+    + '<div style="background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:16px 22px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10">'
+      + '<span class="ms" style="color:#fff;font-size:22px">archive</span>'
+      + '<div style="flex:1">'
+        + '<div style="font-size:15px;font-weight:800;color:#fff">'+arc.label+' — أرشيف</div>'
+        + '<div style="font-size:11px;color:#7dd8f5">للعرض والمراجعة فقط — أُرشف في '+new Date(arc.archivedAt).toLocaleString('ar-EG')+'</div>'
+      + '</div>'
+      + '<span style="background:rgba(255,255,255,.15);color:#fff;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700">🔒 نسخة مجمّدة</span>'
+      + ("<button onclick='document.getElementById(\"archive-view-mo\").remove()' style='background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff'><span class='ms'>close</span></button>")
+    + '</div>'
+    + '<div style="padding:20px">'+bodyHtml+'</div>'
+    + '</div>';
+
+  document.body.appendChild(mo);
+}
+
 function kpiCard(icon, label, val, color='#0f2057', bg='#eef2ff'){
   return `<div class="kc"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px"><span style="font-size:11px;font-weight:700;color:#4a5982">${label}</span><div style="width:30px;height:30px;border-radius:8px;background:${bg};display:flex;align-items:center;justify-content:center"><span class="ms ms-sm" style="color:${color}">${icon}</span></div></div><div style="font-size:22px;font-weight:800;color:${color}">${val}</div></div>`;}
 
