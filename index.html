@@ -808,6 +808,9 @@ body.auth-mode {
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <select class="fi" id="lv-year" style="width:auto" onchange="renderLeave()"></select>
       <button class="btn bn" onclick="openLeaveMo()"><span class="ms ms-sm">add</span>تسجيل إجازة</button>
+      <button class="btn bg" onclick="repairLeaveRecords()" title="يفحص كل الأيام المحوّلة لإجازة اعتيادية من كشف المرتبات ويصلح أي نقص في الرصيد">
+        <span class="ms ms-sm">build</span>إصلاح الرصيد
+      </button>
     </div>
   </div>
 
@@ -1638,10 +1641,23 @@ const _svOriginal = sv;
 function sv(k, d){
   // حفظ محلي أولاً (دايماً)
   _svOriginal(k, d);
-  // رفع Firebase في الخلفية لو متصل
+  // رفع Firebase في الخلفية لو متصل + تحديث وقت آخر تعديل
+  // (ضروري عشان أي جهاز تاني يعرف إن فيه تحديث جديد وينزّله تلقائيًا)
   if(fbSyncEnabled && fbOnline && FB_SYNC_KEYS.includes(k)){
-    fbPush(k, d).catch(()=>{});
+    fbPush(k, d).then(()=>fbTouchLastUpdate()).catch(()=>{});
   }
+}
+
+// ===== تحديث وقت آخر تعديل على Firebase (يُستدعى بعد أي حفظ فعلي) =====
+async function fbTouchLastUpdate(){
+  if(!fbOnline || !window._fb) return;
+  try{
+    const { ref, set, db } = window._fb;
+    await set(ref(db, 'zz/_lastUpdate'), {
+      ts: new Date().toISOString(),
+      device: (navigator.userAgent||'').slice(0,50)
+    });
+  } catch(e){}
 }
 
 // ===== رفع كل البيانات لـ Firebase (Full Upload) =====
@@ -1660,10 +1676,7 @@ async function fbUploadAll(){
     }
   }
   // رفع وقت آخر تحديث
-  if(window._fb){
-    const { ref, set, db, serverTimestamp } = window._fb;
-    await set(ref(db, 'zz/_lastUpdate'), { ts: new Date().toISOString(), device: navigator.userAgent.slice(0,50) });
-  }
+  await fbTouchLastUpdate();
   toast(`✅ تم رفع ${success}/${FB_SYNC_KEYS.length} جداول لـ Firebase`, 'success');
   logActivity('رفع بيانات لـ Firebase', `${success} جدول`);
 }
@@ -1777,13 +1790,19 @@ async function fbAutoSyncOnLogin(){
 
     // نجيب وقت آخر تحديث من Firebase
     const metaSnap = await get(ref(db, 'zz/_lastUpdate'));
-    if(!metaSnap.exists()) return; // مفيش بيانات في Firebase بعد
+    let fbTs = metaSnap.exists() ? (metaSnap.val()?.ts || '') : '';
 
-    const fbTs  = metaSnap.val()?.ts || '';
+    if(!fbTs){
+      // بيانات قديمة من قبل تفعيل الطابع الزمني — تحقق لو فيه بيانات فعلية أصلاً
+      const empSnap = await get(ref(db, 'zz/emp'));
+      if(!empSnap.exists()) return; // فعلاً مفيش بيانات في Firebase بعد
+      fbTs = new Date().toISOString(); // اعتبرها تحديث "جديد" ونزّلها فورًا
+    }
+
     const localTs = localStorage.getItem('zz_lastSync') || '';
 
-    // لو Firebase أحدث من النسخة المحلية → نجيب التحديثات
-    if(fbTs && fbTs !== localTs){
+    // لو Firebase أحدث من النسخة المحلية (أو أول مرة) → نجيب التحديثات
+    if(fbTs !== localTs){
       await fbAutoDownloadChanges(fbTs);
     }
   } catch(e){
@@ -2022,24 +2041,30 @@ function convertAttStatus(attId, newStatus, opts={}){
       toast('رصيد الإجازات غير كافٍ','error');
       return false;
     }
-    // إضافة سجل إجازة
-    const newLeave = {
-      id: 'lv_att_'+attId,
-      eid: rec.eid,
-      from: rec.dt, to: rec.dt,
-      days: 1,
-      year: year,
-      month: new Date(rec.dt).getMonth()+1,
-      status: 'معتمدة',
-      note: 'تحويل من كشف المرتبات',
-      reqDate: new Date().toISOString().slice(0,10),
-      createdAt: new Date().toISOString()
-    };
-    // منع التكرار
-    if(!DB.leaves.find(l=>l.id===newLeave.id)){
-      DB.leaves.push(newLeave);
-      localStorage.setItem('zz_leaves', JSON.stringify(DB.leaves));
+    // إضافة سجل إجازة (أو إعادة تفعيله لو كان ملغى من قبل)
+    const existingLv = DB.leaves.find(l=>l.id==='lv_att_'+attId);
+    if(existingLv){
+      const lIdx = DB.leaves.indexOf(existingLv);
+      DB.leaves[lIdx] = {
+        ...existingLv,
+        status:'معتمدة', cancelledAt:null, cancelReason:null,
+        year, month:new Date(rec.dt).getMonth()+1
+      };
+    } else {
+      DB.leaves.push({
+        id: 'lv_att_'+attId,
+        eid: rec.eid,
+        from: rec.dt, to: rec.dt,
+        days: 1,
+        year: year,
+        month: new Date(rec.dt).getMonth()+1,
+        status: 'معتمدة',
+        note: 'تحويل من كشف المرتبات',
+        reqDate: new Date().toISOString().slice(0,10),
+        createdAt: new Date().toISOString()
+      });
     }
+    sv('leaves', DB.leaves);
   }
 
   // === تحديث حالة السجل ===
@@ -2052,7 +2077,6 @@ function convertAttStatus(attId, newStatus, opts={}){
   };
 
   sv('att', DB.att);
-  if(DB.leaves) localStorage.setItem('zz_leaves', JSON.stringify(DB.leaves));
 
   logActivity('تحويل حالة حضور',
     `${emp.nm} | ${rec.dt} | ${oldStatus} → ${newStatus}`);
@@ -2913,8 +2937,10 @@ function importEmpsFromCSV(input){
         const vals=lines[i].split(',');const row={};headers.forEach((h,j)=>row[h]=(vals[j]||'').trim());const code=row['رقم الموظف']||row['empCode']||'';const name=row['اسم الموظف']||row['empName']||('موظف '+code);if(code&&!empMap[code]) empMap[code]={code,name};}
       const emps=Object.values(empMap);if(!emps.length){toast('لم يتم العثور على موظفين','error');return;}
       let added=0,skipped=0;emps.forEach(({code,name})=>{
-        const exists=DB.emp.find(e=>e.cd===code);if(exists){skipped++;return;}
-        DB.emp.push({id:uid(),nm:name,cd:code,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل (1.5×)',ins:'غير مشمول',insAmt:0,st:'نشط'});added++;});sv('emp',DB.emp);renderEmp();renderDash();toast('✅ تم إضافة '+added+' موظف — تجاهل '+skipped+' موجود','success');if(added>0) setTimeout(()=>toast('💡 راجع الموظفين وأضف الرواتب من صفحة الموظفون','info'),3500);input.value='';}catch(err){toast('خطأ:'+err.message,'error');}
+        const codeN=String(code).trim();
+        const exists=DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase());if(exists){skipped++;return;}
+        const safeName=(name&&String(name).trim())?String(name).trim():('موظف '+codeN);
+        DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل (1.5×)',ins:'غير مشمول',insAmt:0,st:'نشط'});added++;});sv('emp',DB.emp);renderEmp();renderDash();toast('✅ تم إضافة '+added+' موظف — تجاهل '+skipped+' موجود','success');if(added>0) setTimeout(()=>toast('💡 راجع الموظفين وأضف الرواتب من صفحة الموظفون','info'),3500);input.value='';}catch(err){toast('خطأ:'+err.message,'error');}
   };reader.readAsText(file,'utf-8');}
 
 // ===== استيراد الحضور من CSV البصمة =====
@@ -3543,28 +3569,6 @@ function saveAndPrintLeave(){
 }
 
 // ===== تحديث renderLeave لإضافة أزرار التعديل والحذف والطباعة =====
-function renderLeaveTable(emps){
-  if(!emps){
-    const q=(document.getElementById('lv-q')?.value||'').toLowerCase();
-    emps=DB.emp.filter(e=>e.st==='نشط'&&(!q||(e.nm||'').toLowerCase().includes(q)));
-  }
-  const year = Number(document.getElementById('lv-year')?.value||new Date().getFullYear());
-  const MONTHS_LV=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
-  // تحديث الـ KPIs
-  const totBal = emps.reduce((s,e)=>s+Number(e.leaveBal||30),0);
-  const usedYear = DB.leaves.filter(l=>l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
-  const usedMonth = DB.leaves.filter(l=>l.year===year&&l.month===DB.cycle.m&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
-  const remaining = totBal - usedYear;
-
-  const kpiEl = document.getElementById('lv-kpis');
-  if(kpiEl) kpiEl.innerHTML = `
-    \${kpiCard('beach_access','إجمالي الرصيد السنوي',totBal+' يوم','#0f2057','#eef2ff')}
-    \${kpiCard('event_busy','مأخوذ هذا الشهر',usedMonth+' يوم','#d97706','#fef3c7')}
-    \${kpiCard('event_busy','مأخوذ هذا العام',usedYear+' يوم','#e03131','#ffe5e5')}
-    \${kpiCard('event_available','المتبقي الكلي',remaining+' يوم','#16a34a','#dcfce7')}`;
-
-  renderLeaveTable(emps);
-}
 // ===== سجل إجازات موظف مع إمكانية التعديل والحذف =====
 function showLeaveHistory(eid, year){
   const e = DB.emp.find(x=>x.id===eid);
@@ -3837,6 +3841,68 @@ function saveLeaveAndPrint(lid){
 const DAYS_AR = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];const MAR3 = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];// DB للإجازات
 if(!DB.leaves) DB.leaves = JSON.parse(localStorage.getItem('zz_leaves')||'[]');function initLeaveYear(){
   const sel = document.getElementById('lv-year');if(!sel||sel.options.length>1) return;const y = new Date().getFullYear();for(let i=y+1;i>=y-2;i--) sel.innerHTML+=`<option value="${i}"${i===y?' selected':''}>${i}</option>`;}
+
+
+// ===== إصلاح رصيد الإجازات — مزامنة كشف المرتبات مع سجل الإجازات =====
+// يعالج أي أيام اتحولت لـ"إجازة اعتيادية" من كشف المرتبات قبل إصلاح
+// الحفظ التلقائي، فبقيت الحالة مسجلة في الحضور لكن بدون خصم من الرصيد
+function repairLeaveRecords(){
+  const session = getSession();
+  if(!session || session.role!=='admin'){ toast('هذه الأداة للأدمن فقط','error'); return; }
+
+  const leaveAtt = DB.att.filter(a=>a.st==='إجازة اعتيادية');
+  let created = 0, reactivated = 0, removed = 0;
+
+  // 1) لكل يوم حالته "إجازة اعتيادية" في الحضور — تأكد من وجود سجل إجازة معتمد مطابق
+  leaveAtt.forEach(rec=>{
+    const lid = 'lv_att_'+rec.id;
+    const existing = DB.leaves.find(l=>l.id===lid);
+    const year = new Date(rec.dt).getFullYear();
+    const month = new Date(rec.dt).getMonth()+1;
+    if(existing){
+      if(existing.status==='ملغاة'){
+        existing.status='معتمدة'; existing.cancelledAt=null; existing.cancelReason=null;
+        existing.year=year; existing.month=month;
+        reactivated++;
+      }
+      return;
+    }
+    // تأكد كمان مفيش سجل إجازة تاني (بمعرف مختلف) يغطي نفس اليوم لنفس الموظف
+    const covering = DB.leaves.find(l=>l.eid===rec.eid&&l.status!=='ملغاة'&&l.from<=rec.dt&&l.to>=rec.dt);
+    if(covering) return; // مغطى بالفعل بسجل آخر
+    DB.leaves.push({
+      id: lid, eid: rec.eid,
+      from: rec.dt, to: rec.dt, days: 1,
+      year, month,
+      status: 'معتمدة',
+      note: 'إصلاح تلقائي — تحويل من كشف المرتبات',
+      reqDate: new Date().toISOString().slice(0,10),
+      createdAt: new Date().toISOString()
+    });
+    created++;
+  });
+
+  // 2) العكس: سجلات إجازة (من نفس مصدر التحويل lv_att_) لأيام رجعت غير "إجازة اعتيادية" في الحضور — تُلغى
+  DB.leaves.forEach(l=>{
+    if(!String(l.id||'').startsWith('lv_att_')) return;
+    if(l.status==='ملغاة') return;
+    const attId = String(l.id).replace('lv_att_','');
+    const att = DB.att.find(a=>a.id===attId);
+    if(!att || att.st!=='إجازة اعتيادية'){
+      l.status='ملغاة'; l.cancelledAt=new Date().toISOString(); l.cancelReason='إصلاح تلقائي — لم يعد اليوم إجازة اعتيادية';
+      removed++;
+    }
+  });
+
+  sv('leaves', DB.leaves);
+  renderLeave();
+
+  const parts = [];
+  if(created)     parts.push(`إضافة ${created}`);
+  if(reactivated)  parts.push(`إعادة تفعيل ${reactivated}`);
+  if(removed)      parts.push(`إلغاء ${removed}`);
+  toast(parts.length ? '✅ تم الإصلاح — '+parts.join(' / ') : 'الرصيد مضبوط بالفعل، لا يوجد ما يحتاج إصلاحاً', 'success');
+}
 
 function renderLeave(){
   initLeaveYear();const year = Number(document.getElementById('lv-year')?.value||new Date().getFullYear());const q = (document.getElementById('lv-q')?.value||'').toLowerCase();const emps = DB.emp.filter(e=>e.st==='نشط'&&(!q||(e.nm||'').toLowerCase().includes(q)));// KPIs
@@ -4179,9 +4245,14 @@ async function startFetch(){
 
     setProgress(70,'⚙️ جاري معالجة البيانات...');const records=data.records||[];let addedEmps=0,addedAtt=0,skippedAtt=0;// استيراد الموظفين الجدد
     if(importEmps){
-      const empMap={};records.forEach(r=>{if(r.empCode&&!empMap[r.empCode])empMap[r.empCode]=r.empName;});Object.entries(empMap).forEach(([code,name])=>{
-        if(!DB.emp.find(e=>e.cd===code)){
-          DB.emp.push({id:uid(),nm:name,cd:code,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل (1.5×)',ins:'غير مشمول',insAmt:0,st:'نشط'});addedEmps++;}
+      const empMap={};records.forEach(r=>{if(r.empCode&&!empMap[r.empCode])empMap[r.empCode]=r.empName;});
+      Object.entries(empMap).forEach(([code,name])=>{
+        const codeN = String(code).trim();
+        // مطابقة مرنة (تجاهل المسافات وحالة الأحرف) لمنع تكرار نفس الموظف باسم فاضي
+        if(!DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase())){
+          const safeName = (name && String(name).trim()) ? String(name).trim() : ('موظف '+codeN);
+          DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل (1.5×)',ins:'غير مشمول',insAmt:0,st:'نشط'});addedEmps++;
+        }
       });if(addedEmps>0){sv('emp',DB.emp);renderEmp();}
     }
 
@@ -5159,10 +5230,6 @@ function savePayrollDayEdit(eid, dt){
   renderAtt();
   renderDash();
   if(typeof renderLeave === 'function') renderLeave();
-  if(typeof renderLeaveTable === 'function'){
-    const emps = DB.emp.filter(e=>e.st==='نشط');
-    renderLeaveTable(emps);
-  }
 }
 
 // ===== تقرير الحضور والانصراف اليومي =====
@@ -5194,9 +5261,13 @@ function reportDailyAttendance(el){
         <label class="fl">نوع</label>
         <select class="fi" id="att-rep-type" style="width:auto" onchange="renderDailyAttReport()">
           <option value="">الكل</option>
+          <option value="present">حضور</option>
+          <option value="absent">غياب بإذن</option>
+          <option value="unauth">غياب بدون إذن</option>
+          <option value="late">متأخرون</option>
+          <option value="leave">إجازة اعتيادية</option>
+          <option value="rest_work">عمل في راحته</option>
           <option value="early">انصراف مبكر</option>
-          <option value="ot">أوفرتايم</option>
-          <option value="absent">غياب</option>
         </select>
       </div>
       <!-- فلتر موظف -->
@@ -5225,32 +5296,50 @@ function reportDailyAttendance(el){
 function renderDailyAttReport(){
   const date    = document.getElementById('att-report-date')?.value;
   const dept    = document.getElementById('att-report-dept')?.value||'';
-  const fromD   = document.getElementById('att-rep-from')?.value||'';
-  const toD     = document.getElementById('att-rep-to')?.value||'';
+  let   fromD   = document.getElementById('att-rep-from')?.value||'';
+  let   toD     = document.getElementById('att-rep-to')?.value||'';
   const repType = document.getElementById('att-rep-type')?.value||'';
   const repEmp  = document.getElementById('att-rep-emp')?.value||'';
   const el = document.getElementById('att-report-result');
   if(!el) return;
+
   // لو فيه فترة زمنية → نستخدمها بدل التاريخ الواحد
-  const useRange = fromD && toD;
+  const useRange = !!(fromD && toD);
   if(!date && !useRange) return;
-  const [yr,mn,dy] = (date||fromD).split('-').map(Number);
+  if(useRange && fromD > toD){ const t=fromD; fromD=toD; toD=t; }
+
   const grace = gr('lt_gr',15);
-  const dayName = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'][new Date(yr,mn-1,dy).getDay()];
+  const DAYS5=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
   const MAR5=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 
-  // جميع الموظفين النشطين
-  const emps = DB.emp.filter(e=>e.st==='نشط'&&(!dept||e.dp===dept));
+  // قائمة التواريخ المطلوب تغطيتها
+  let dateList = [];
+  if(useRange){
+    let cur = new Date(fromD+'T00:00:00');
+    const last = new Date(toD+'T00:00:00');
+    let guard = 0;
+    while(cur <= last && guard < 370){
+      dateList.push(cur.toISOString().slice(0,10));
+      cur.setDate(cur.getDate()+1);
+      guard++;
+    }
+  } else {
+    dateList = [date];
+  }
 
-  // بناء التقرير لكل موظف
-  const rows = emps.map(e=>{
-    const att = DB.att.find(a=>a.eid===e.id&&a.dt===date);
+  // الموظفون (فلترة القسم + موظف محدد)
+  let emps = DB.emp.filter(e=>e.st==='نشط'&&(!dept||e.dp===dept));
+  if(repEmp) emps = emps.filter(e=>e.id===repEmp);
+
+  // بناء صف واحد لكل (تاريخ × موظف)
+  function buildRow(e, dt){
+    const [yr,mn,dy] = dt.split('-').map(Number);
+    const att = DB.att.find(a=>a.eid===e.id&&a.dt===dt);
     const restDayNum = e.restDay!==undefined&&e.restDay!=='' ? Number(e.restDay) : -1;
     const isRestDay = restDayNum>=0 && new Date(yr,mn-1,dy).getDay()===restDayNum;
-    const leaveRec = DB.leaves?.find(l=>l.eid===e.id&&l.from<=date&&l.to>=date);
+    const leaveRec = DB.leaves?.find(l=>l.eid===e.id&&l.status!=='ملغاة'&&l.from<=dt&&l.to>=dt);
     const lateMin = Number(att?.lateMin||0);
 
-    // تحديد الحالة
     let status='', statusColor='', statusBg='', details='';
 
     if(leaveRec){
@@ -5266,7 +5355,6 @@ function renderDailyAttReport(){
     } else if(att.st==='إجازة رسمية'){
       status='إجازة رسمية'; statusBg='#dcfce7'; statusColor='#16a34a';
     } else if(att.st==='حضور'){
-      // تحديد التأخير
       if(lateMin<=grace){
         status='حضور'; statusBg='#dcfce7'; statusColor='#16a34a';
       } else if(lateMin<=30){
@@ -5278,50 +5366,96 @@ function renderDailyAttReport(){
       } else {
         status=`متأخر ${lateMin} دقيقة (يوم كامل+)`; statusBg='#ffe5e5'; statusColor='#e03131';
       }
-      // انصراف مبكر
-      if(att.to){
-        const [h,m2]=att.to.split(':').map(Number);
-        if(h<16) details=`انصراف مبكر ${att.to}`;
-      }
     } else {
       status=att.st||'—'; statusBg='#f0f4fc'; statusColor='#94a3b8';
     }
 
-    return {e, att, status, statusBg, statusColor, details, lateMin, isRestDay};
+    // انصراف مبكر — حسب ميعاد الحضور المحدد في كارت الموظف لو متاح
+    let isEarly=false;
+    if(att?.ti && att?.to){
+      const wb = (typeof calcWorkBalance==='function') ? calcWorkBalance(e.id, dt) : null;
+      if(wb && wb.balanceMins < 0){
+        isEarly = true;
+        details = `انصراف مبكر ${formatTime12?formatTime12(att.to):att.to}`;
+      } else if(!wb){
+        const [h] = att.to.split(':').map(Number);
+        if(h<16){ isEarly=true; details=`انصراف مبكر ${att.to}`; }
+      }
+    }
+
+    // أوفرتايم
+    const otVal = (typeof calcShiftOT==='function') ? calcShiftOT(e.id, dt) : Number(att?.ot||0);
+    const isOT = otVal > 0;
+
+    return {e, att, dt, status, statusBg, statusColor, details, lateMin, isRestDay, isEarly, isOT, hasLeave: !!leaveRec};
+  }
+
+  let rows = [];
+  dateList.forEach(dt=>{
+    emps.forEach(e=>{ rows.push(buildRow(e, dt)); });
   });
 
-  // KPIs
-  const present = rows.filter(r=>r.att?.st==='حضور').length;
-  const absent = rows.filter(r=>!r.att&&!r.isRestDay).length;
-  const unauth = rows.filter(r=>r.att?.st==='غياب بدون إذن').length;
-  const late = rows.filter(r=>r.lateMin>grace).length;
-  const restWork = rows.filter(r=>r.isRestDay&&r.att?.st==='حضور').length;
-  const onLeave = rows.filter(r=>DB.leaves?.find(l=>l.eid===r.e.id&&l.from<=date&&l.to>=date)).length;
+  // فلترة حسب النوع (الصناديق القابلة للضغط)
+  if(repType==='present')    rows = rows.filter(r=>r.att?.st==='حضور');
+  else if(repType==='absent')    rows = rows.filter(r=>!r.att && !r.isRestDay);
+  else if(repType==='unauth')    rows = rows.filter(r=>r.att?.st==='غياب بدون إذن');
+  else if(repType==='late')      rows = rows.filter(r=>r.lateMin>grace);
+  else if(repType==='leave')     rows = rows.filter(r=>r.hasLeave);
+  else if(repType==='rest_work') rows = rows.filter(r=>r.isRestDay && r.att?.st==='حضور');
+  else if(repType==='early')     rows = rows.filter(r=>r.isEarly);
+  else if(repType==='ot')        rows = rows.filter(r=>r.isOT);
+
+  // KPIs (تُحسب من كل الصفوف قبل فلترة النوع لتبقى الأرقام صحيحة دائماً)
+  let allRows = [];
+  dateList.forEach(dt=>{ emps.forEach(e=>{ allRows.push(buildRow(e, dt)); }); });
+  const present  = allRows.filter(r=>r.att?.st==='حضور').length;
+  const absent   = allRows.filter(r=>!r.att && !r.isRestDay).length;
+  const unauth   = allRows.filter(r=>r.att?.st==='غياب بدون إذن').length;
+  const late     = allRows.filter(r=>r.lateMin>grace).length;
+  const restWork = allRows.filter(r=>r.isRestDay && r.att?.st==='حضور').length;
+  const onLeave  = allRows.filter(r=>r.hasLeave).length;
+  const early    = allRows.filter(r=>r.isEarly).length;
+
+  // عنوان التقرير
+  let titleHtml, subHtml;
+  if(useRange){
+    titleHtml = `تقرير حضور من ${fromD} إلى ${toD}`;
+    subHtml = `${dept||'كل الأقسام'} — ${emps.length} موظف — ${dateList.length} يوم`;
+  } else {
+    const [yr,mn,dy] = date.split('-').map(Number);
+    const dayName = DAYS5[new Date(yr,mn-1,dy).getDay()];
+    titleHtml = `تقرير حضور ${dayName} ${dy} ${MAR5[mn-1]} ${yr}`;
+    subHtml = `${dept||'كل الأقسام'} — ${emps.length} موظف`;
+  }
+
+  const kpiBoxes = [
+    {t:'present',   l:'حضور',            v:present,  c:'#16a34a', bg:'#dcfce7', ic:'check_circle'},
+    {t:'absent',    l:'غياب بإذن',       v:absent,   c:'#d97706', bg:'#fef3c7', ic:'event_busy'},
+    {t:'unauth',    l:'غياب بدون إذن',   v:unauth,   c:'#e03131', bg:'#ffe5e5', ic:'alarm_off'},
+    {t:'late',      l:'متأخرون',         v:late,     c:'#ea580c', bg:'#fff7ed', ic:'schedule'},
+    {t:'leave',     l:'إجازة اعتيادية',  v:onLeave,  c:'#7c3aed', bg:'#f0edff', ic:'beach_access'},
+    {t:'rest_work', l:'عمل في راحته',    v:restWork, c:'#0369a1', bg:'#e0f2fe', ic:'swap_horiz'},
+    {t:'early',     l:'انصراف مبكر',     v:early,    c:'#be185d', bg:'#fce7f3', ic:'directions_run'},
+  ];
 
   el.innerHTML = `
   <!-- Header التقرير -->
   <div style="background:linear-gradient(135deg,#0f2057,#1e3a8a);border-radius:14px;padding:14px 20px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
     <div>
-      <div style="font-size:15px;font-weight:800;color:#fff">تقرير حضور ${dayName} ${dy} ${MAR5[mn-1]} ${yr}</div>
-      <div style="font-size:11.5px;color:#93c5fd;margin-top:2px">${dept||'كل الأقسام'} — ${emps.length} موظف</div>
+      <div style="font-size:15px;font-weight:800;color:#fff">${titleHtml}</div>
+      <div style="font-size:11.5px;color:#93c5fd;margin-top:2px">${subHtml}</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <span style="background:rgba(255,255,255,.15);color:#fff;border-radius:8px;padding:4px 12px;font-size:11.5px;font-weight:700">حضور: ${present}</span>
       <span style="background:rgba(224,49,49,.3);color:#fca5a5;border-radius:8px;padding:4px 12px;font-size:11.5px;font-weight:700">غياب: ${absent+unauth}</span>
       <span style="background:rgba(234,179,8,.3);color:#fde68a;border-radius:8px;padding:4px 12px;font-size:11.5px;font-weight:700">متأخر: ${late}</span>
+      ${repType?`<button onclick="setDailyReportType('')" style="background:rgba(255,255,255,.2);color:#fff;border:none;border-radius:8px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:Cairo,sans-serif">✕ إلغاء الفلتر</button>`:''}
     </div>
   </div>
 
-  <!-- KPIs -->
+  <!-- KPIs قابلة للضغط للفلترة -->
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-bottom:14px">
-    ${[
-      {l:'حضور',v:present,c:'#16a34a',bg:'#dcfce7',ic:'check_circle'},
-      {l:'غياب بإذن',v:absent,c:'#d97706',bg:'#fef3c7',ic:'event_busy'},
-      {l:'غياب بدون إذن',v:unauth,c:'#e03131',bg:'#ffe5e5',ic:'alarm_off'},
-      {l:'متأخرون',v:late,c:'#ea580c',bg:'#fff7ed',ic:'schedule'},
-      {l:'إجازة اعتيادية',v:onLeave,c:'#7c3aed',bg:'#f0edff',ic:'beach_access'},
-      {l:'عمل في راحته',v:restWork,c:'#0369a1',bg:'#e0f2fe',ic:'swap_horiz'},
-    ].map(k=>`<div style="background:#fff;border-radius:11px;padding:12px;border:1px solid #eaeffa;text-align:center">
+    ${kpiBoxes.map(k=>`<div onclick="setDailyReportType('${k.t}')" style="cursor:pointer;background:#fff;border-radius:11px;padding:12px;border:2px solid ${repType===k.t?k.c:'#eaeffa'};text-align:center;transition:border-color .15s">
       <span class="ms ms-sm" style="color:${k.c}">${k.ic}</span>
       <div style="font-size:22px;font-weight:800;color:${k.c};margin:4px 0">${k.v}</div>
       <div style="font-size:10.5px;color:#94a3b8;font-weight:600">${k.l}</div>
@@ -5333,6 +5467,7 @@ function renderDailyAttReport(){
     <div style="overflow-x:auto"><table class="dt">
       <thead><tr>
         <th>#</th><th>الموظف</th><th>القسم</th>
+        ${useRange?'<th>التاريخ</th>':''}
         <th style="text-align:center">دخول</th>
         <th style="text-align:center">خروج</th>
         <th style="text-align:center">الساعات</th>
@@ -5341,12 +5476,13 @@ function renderDailyAttReport(){
         <th>ملاحظات</th>
       </tr></thead>
       <tbody>
-      ${rows.map((r,i)=>`<tr style="background:${i%2?'#fafbff':'#fff'}">
+      ${rows.length?rows.map((r,i)=>`<tr style="background:${i%2?'#fafbff':'#fff'}">
         <td style="color:#94a3b8;font-size:11px">${i+1}</td>
         <td style="font-weight:700">${r.e.nm}<br/><span style="font-size:10px;color:#94a3b8">${r.e.cd||''}</span></td>
         <td><span style="background:#eef2ff;color:#0f2057;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700">${r.e.dp||'—'}</span></td>
-        <td style="text-align:center;font-weight:700;color:#0f2057">${r.att?.ti||'—'}</td>
-        <td style="text-align:center;font-weight:700;color:#4a5982">${r.att?.to||'—'}</td>
+        ${useRange?`<td style="font-size:11px;color:#4a5982">${r.dt}</td>`:''}
+        <td style="text-align:center;font-weight:700;color:#0f2057">${r.att?.ti?(formatTime12?formatTime12(r.att.ti):r.att.ti):'—'}</td>
+        <td style="text-align:center;font-weight:700;color:#4a5982">${r.att?.to?(formatTime12?formatTime12(r.att.to):r.att.to):'—'}</td>
         <td style="text-align:center;font-size:12px">${r.att?.ti&&r.att?.to?calcH(r.att.ti,r.att.to):'—'}</td>
         <td style="text-align:center">
           ${r.lateMin>grace?`<span style="background:#fff7ed;color:#ea580c;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">${r.lateMin} د</span>`:'<span style="color:#94a3b8;font-size:11px">—</span>'}
@@ -5355,14 +5491,22 @@ function renderDailyAttReport(){
           <span style="background:${r.statusBg};color:${r.statusColor};border-radius:8px;padding:3px 9px;font-size:11px;font-weight:700;white-space:nowrap">${r.status}</span>
         </td>
         <td style="font-size:11.5px;color:#4a5982">${r.details||r.att?.nt||'—'}</td>
-      </tr>`).join('')}
+      </tr>`).join(''):'<tr><td colspan="9" style="text-align:center;padding:30px;color:#94a3b8">لا توجد نتائج مطابقة للفلتر</td></tr>'}
       </tbody>
     </table></div>
   </div>`;
 
   // حفظ بيانات التقرير للتصدير
   window._attReportRows = rows;
-  window._attReportDate = date;
+  window._attReportDate = useRange ? (fromD+'_'+toD) : date;
+}
+
+// ===== ضبط فلتر النوع من الصناديق ثم إعادة العرض =====
+function setDailyReportType(type){
+  const sel = document.getElementById('att-rep-type');
+  if(!sel) return;
+  sel.value = (sel.value===type) ? '' : type; // ضغط على نفس الصندوق يلغي الفلتر
+  renderDailyAttReport();
 }
 
 function exportDailyAttCSV(){
