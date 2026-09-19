@@ -717,6 +717,13 @@ body.auth-mode {
       <div style="font-size:14px;font-weight:800;color:#0f2057;margin-bottom:15px;display:flex;align-items:center;gap:8px"><span class="ms" style="color:#1e3a8a">schedule</span>قواعد الأوفرتايم</div>
       <div style="display:flex;flex-direction:column;gap:11px">
         <div style="background:#eef2ff;border-radius:8px;padding:8px 11px;font-size:11.5px;color:#1e3a8a;font-weight:700">⏱ ساعة إضافية عادية</div>
+        <div><label class="fl">أساس حساب قيمة الساعة</label>
+          <select class="fi" id="r-ot-hr-base">
+            <option value="basic">الراتب الأساسي فقط ÷ 30 ÷ 8</option>
+            <option value="basic_allow">الأساسي + البدلات الداخلة في الحساب ÷ 30 ÷ 8</option>
+          </select>
+          <div style="font-size:10.5px;color:#94a3b8;margin-top:3px">هذا الأساس هو المستخدم في كل حسابات الأوفرتايم بالساعة — القاعدة الوحيدة، بلا استثناء</div>
+        </div>
         <div><label class="fl">طريقة حساب الساعة العادية</label>
           <select class="fi" id="r-ot-rg-mode">
             <option value="1.5">معامل 1.5 × قيمة الساعة</option>
@@ -1350,11 +1357,10 @@ body.auth-mode {
       <div><label class="fl">تاريخ الالتحاق</label><input class="fi" id="ef-jn" type="date"/></div>
       <div><label class="fl">نوع الراتب</label><select class="fi" id="ef-tp"><option>شهري عادي</option><option>كادر إداري</option><option>أساسي + عمولة</option></select></div>
       <div><label class="fl">الأوفرتايم</label><select class="fi" id="ef-ot">
-          <option value="مؤهل (1.5×)">مؤهل (1.5×)</option>
-          <option value="مؤهل (1×)">مؤهل (1×)</option>
-          <option value="مؤهل شفت (2×)">مؤهل شفت (2×)</option>
+          <option value="مؤهل">مؤهل للأوفرتايم</option>
           <option value="غير مؤهل">غير مؤهل</option>
-        </select></div>
+        </select>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:3px">قيمة الأوفرتايم نفسها (الأساس والمعامل) تُحدَّد من "القواعد والإعدادات" لكل الموظفين معًا</div></div>
       <div><label class="fl">التأمينات</label><select class="fi" id="ef-in"><option>مؤمَّن عليه</option><option>غير مشمول</option></select></div>
       <div>
         <label class="fl" style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -2405,12 +2411,15 @@ function calcSlip(emp){
   let insEmp=0;if(emp.ins==='مؤمَّن عليه'){
     const empAmt=Number(emp.insAmt)||0;insEmp=empAmt>0?empAmt:gr('ins_fixed',0);}
   // أوفرتايم — فقط لو الموظف مؤهل
-  const empOtEligible = (emp.ot||'مؤهل (1.5×)') !== 'غير مؤهل';
+  const empOtEligible = (emp.ot||'مؤهل') !== 'غير مؤهل';
   let otRecs = [];
   if(empOtEligible){
     otRecs = DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m&&Number(a.ot)>0);
   }
-  const hrRate=dailyBasic/8;
+  // أساس حساب قيمة الساعة — القاعدة الوحيدة المستخدمة لكل حسابات الأوفرتايم
+  // بالساعة، تُحدَّد من القواعد والإعدادات فقط (مفيش قاعدة تانية في مكان تاني)
+  const otHrBase = DB.rules['ot_hr_base']||'basic';
+  const hrRate = otHrBase==='basic_allow' ? (basic+allowInCalc)/30/8 : dailyBasic/8;
   const dayRate=(basic+allowInCalc)/30;
   let otVal=0, otDetails=[];
   otRecs.forEach(a=>{
@@ -2515,10 +2524,48 @@ function closeEmpMo(){document.getElementById('emp-mo').classList.remove('open')
 function clearEmpForm(){
   ['ef-nm','ef-cd','ef-ttl','ef-bs','ef-al','ef-ph','ef-jn'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});clearAllowances();const tsel=document.getElementById('ef-ttl-select');if(tsel)tsel.value='';const pd=document.getElementById('ef-photo-data');if(pd)pd.value='';const pp=document.getElementById('ef-photo-preview');if(pp){pp.innerHTML='<span id="ef-photo-initials">؟</span>';pp.style.backgroundImage='';}
 }
+
+// ===== ميعاد الحضور — حساب الانصراف المتوقع تلقائيًا =====
+document.addEventListener('change', function(e){
+  if(e.target && e.target.id === 'ef-workTime'){
+    const val = e.target.value;
+    const prev = document.getElementById('ef-workTime-preview');
+    if(!prev) return;
+    if(!val){ prev.textContent=''; return; }
+    const [h, m] = val.split(':').map(Number);
+    const outMins = h*60 + m + 480; // +8 ساعات
+    const outH = Math.floor(outMins/60) % 24;
+    const outM = outMins % 60;
+    const ap = outH>=12?'م':'ص';
+    const h12 = outH%12||12;
+    prev.textContent = 'الانصراف المتوقع: '+String(h12).padStart(2,'0')+':'+String(outM).padStart(2,'0')+' '+ap;
+  }
+});
+
 function previewEmpPhoto(input){
-  const file=input.files[0];if(!file)return;const reader=new FileReader();reader.onload=function(e){
-    const data=e.target.result;const pd=document.getElementById('ef-photo-data');if(pd)pd.value=data;const pp=document.getElementById('ef-photo-preview');if(pp){pp.innerHTML=`<img src="${data}" style="width:64px;height:64px;object-fit:cover"/>`;} 
-  };reader.readAsDataURL(file);}
+  const file=input.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const img = new Image();
+    img.onload = function(){
+      // ضغط الصورة لحجم صغير (200×200 بالحد الأقصى) قبل التخزين
+      // عشان تتزامن مع Firebase بدل ما تفشل بصمت لو حجمها كبير
+      const MAX = 200;
+      let w = img.width, h = img.height;
+      if(w > h){ if(w > MAX){ h = Math.round(h * MAX / w); w = MAX; } }
+      else { if(h > MAX){ w = Math.round(w * MAX / h); h = MAX; } }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const compressed = canvas.toDataURL('image/jpeg', 0.7);
+      const pd=document.getElementById('ef-photo-data');if(pd)pd.value=compressed;
+      const pp=document.getElementById('ef-photo-preview');if(pp){pp.innerHTML=`<img src="${compressed}" style="width:64px;height:64px;object-fit:cover"/>`;}
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
 function saveEmp(){
   const id=document.getElementById('ef-id').value;const nm=document.getElementById('ef-nm').value.trim(),cd=document.getElementById('ef-cd').value.trim();if(!nm||!cd){toast('الاسم والكود مطلوبان','error');return}
   const insAmtEl=document.getElementById('ef-ins-amt');const photoEl=document.getElementById('ef-photo-data');const existEmp=id?DB.emp.find(x=>x.id===id):null;const e={id:id||uid(),nm,cd,dp:document.getElementById('ef-dp').value,ttl:(document.getElementById('ef-ttl-select')?.value==='other'?document.getElementById('ef-ttl').value:document.getElementById('ef-ttl-select')?.value)||document.getElementById('ef-ttl').value||'',bs:document.getElementById('ef-bs').value,al:document.getElementById('ef-al').value||'0',allowances:JSON.parse(JSON.stringify(allowancesList)),ph:document.getElementById('ef-ph').value,jn:document.getElementById('ef-jn').value,tp:document.getElementById('ef-tp').value,ot:document.getElementById('ef-ot').value,ins:document.getElementById('ef-in').value,insAmt:insAmtEl?Number(insAmtEl.value)||0:0,
@@ -2528,6 +2575,7 @@ function saveEmp(){
     restDay:document.getElementById('ef-rest-day')?.value??'',
     leaveBal:Number(document.getElementById('ef-leave-bal')?.value)||30,
     leaveUsed:existEmp?.leaveUsed||{},
+    workTime:document.getElementById('ef-workTime')?.value||'',
     st:'نشط'};if(id){const i=DB.emp.findIndex(x=>x.id===id);if(i>=0)DB.emp[i]=e}else DB.emp.push(e);sv('emp',DB.emp);closeEmpMo();toast(`تم حفظ ${nm}`,'success');renderEmp();renderDash();}
 function editEmp(id){
   const e=DB.emp.find(x=>x.id===id);if(!e)return;document.getElementById('ef-id').value=e.id;['nm','cd','dp','ttl','bs','al','ph','jn','tp','ot'].forEach(k=>{const el=document.getElementById('ef-'+k);if(el)el.value=e[k]||''});document.getElementById('ef-in').value=e.ins||'مؤمَّن عليه';const insAmtEd=document.getElementById('ef-ins-amt');if(insAmtEd)insAmtEd.value=e.insAmt||'';const rdEl=document.getElementById('ef-rest-day');if(rdEl)rdEl.value=e.restDay??'';const lbEl=document.getElementById('ef-leave-bal');if(lbEl)lbEl.value=e.leaveBal||30;
@@ -3132,12 +3180,12 @@ function exportArcCSV(arcId){
 // ===================== RULES =====================
 function loadRules(){
   const def={ins_co:26,ins_fixed:0,ot_rg:1.5,ot_hl:2,ot_mx:120,lt_gr:15,lt_ml:1,ab_ml:1,r_tr:500,r_lv:300,r_bn:10,unauth_mode:'full',r_unauth_ml:1};const r={...def,...DB.rules};const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn'};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=r[k]});const umEl=document.getElementById('r-unauth-mode');if(umEl)umEl.value=r['unauth_mode']||'full';const umlEl=document.getElementById('r-unauth-ml');if(umlEl)umlEl.value=r['r_unauth_ml']||1;// أوفرتايم
-  const otRgMode=document.getElementById('r-ot-rg-mode');if(otRgMode)otRgMode.value=r['ot_rg_mode']||'1.5';const otDayMode=document.getElementById('r-ot-day-mode');if(otDayMode){otDayMode.value=r['ot_day_mode']||'full_1';document.getElementById('r-ot-day-fixed-wrap').style.display=r['ot_day_mode']==='fixed'?'block':'none';}
+  const otHrBase=document.getElementById('r-ot-hr-base');if(otHrBase)otHrBase.value=r['ot_hr_base']||'basic';const otRgMode=document.getElementById('r-ot-rg-mode');if(otRgMode)otRgMode.value=r['ot_rg_mode']||'1.5';const otDayMode=document.getElementById('r-ot-day-mode');if(otDayMode){otDayMode.value=r['ot_day_mode']||'full_1';document.getElementById('r-ot-day-fixed-wrap').style.display=r['ot_day_mode']==='fixed'?'block':'none';}
   const otDayFixed=document.getElementById('r-ot-day-fixed');if(otDayFixed)otDayFixed.value=r['ot_day_fixed']||0;const otRestMode=document.getElementById('r-ot-rest-mode');if(otRestMode){otRestMode.value=r['ot_rest_mode']||'full_2';document.getElementById('r-ot-rest-fixed-wrap').style.display=r['ot_rest_mode']==='fixed'?'block':'none';}
   const otRestFixed=document.getElementById('r-ot-rest-fixed');if(otRestFixed)otRestFixed.value=r['ot_rest_fixed']||0;}
 function saveRules(){
   const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn'};const r={};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)r[k]=el.value});const umSv=document.getElementById('r-unauth-mode');if(umSv)r['unauth_mode']=umSv.value;const umlSv=document.getElementById('r-unauth-ml');if(umlSv)r['r_unauth_ml']=umlSv.value;// أوفرتايم
-  const svOtRg=document.getElementById('r-ot-rg-mode');if(svOtRg)r['ot_rg_mode']=svOtRg.value;const svOtDay=document.getElementById('r-ot-day-mode');if(svOtDay)r['ot_day_mode']=svOtDay.value;const svOtDayF=document.getElementById('r-ot-day-fixed');if(svOtDayF)r['ot_day_fixed']=svOtDayF.value;const svOtRest=document.getElementById('r-ot-rest-mode');if(svOtRest)r['ot_rest_mode']=svOtRest.value;const svOtRestF=document.getElementById('r-ot-rest-fixed');if(svOtRestF)r['ot_rest_fixed']=svOtRestF.value;['15','30','45','60'].forEach(n=>{const ltEl=document.getElementById('r-lt-'+n+'-mode');if(ltEl)r['lt_'+n+'_mode']=ltEl.value;});DB.rules=r;sv('rules',DB.rules);toast('تم حفظ القواعد','success');}
+  const svOtHrBase=document.getElementById('r-ot-hr-base');if(svOtHrBase)r['ot_hr_base']=svOtHrBase.value;const svOtRg=document.getElementById('r-ot-rg-mode');if(svOtRg)r['ot_rg_mode']=svOtRg.value;const svOtDay=document.getElementById('r-ot-day-mode');if(svOtDay)r['ot_day_mode']=svOtDay.value;const svOtDayF=document.getElementById('r-ot-day-fixed');if(svOtDayF)r['ot_day_fixed']=svOtDayF.value;const svOtRest=document.getElementById('r-ot-rest-mode');if(svOtRest)r['ot_rest_mode']=svOtRest.value;const svOtRestF=document.getElementById('r-ot-rest-fixed');if(svOtRestF)r['ot_rest_fixed']=svOtRestF.value;['15','30','45','60'].forEach(n=>{const ltEl=document.getElementById('r-lt-'+n+'-mode');if(ltEl)r['lt_'+n+'_mode']=ltEl.value;});DB.rules=r;sv('rules',DB.rules);toast('تم حفظ القواعد','success');}
 function loadDefRules(){DB.rules={};sv('rules',DB.rules);loadRules();toast('تمت استعادة الافتراضي','info')}
 
 // ===================== CHARITY =====================
@@ -3167,7 +3215,7 @@ function importEmpsFromCSV(input){
         const codeN=String(code).trim();
         const exists=DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase());if(exists){skipped++;return;}
         const safeName=(name&&String(name).trim())?String(name).trim():('موظف '+codeN);
-        DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل (1.5×)',ins:'غير مشمول',insAmt:0,st:'نشط'});added++;});sv('emp',DB.emp);renderEmp();renderDash();toast('✅ تم إضافة '+added+' موظف — تجاهل '+skipped+' موجود','success');if(added>0) setTimeout(()=>toast('💡 راجع الموظفين وأضف الرواتب من صفحة الموظفون','info'),3500);input.value='';}catch(err){toast('خطأ:'+err.message,'error');}
+        DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل',ins:'غير مشمول',insAmt:0,st:'نشط'});added++;});sv('emp',DB.emp);renderEmp();renderDash();toast('✅ تم إضافة '+added+' موظف — تجاهل '+skipped+' موجود','success');if(added>0) setTimeout(()=>toast('💡 راجع الموظفين وأضف الرواتب من صفحة الموظفون','info'),3500);input.value='';}catch(err){toast('خطأ:'+err.message,'error');}
   };reader.readAsText(file,'utf-8');}
 
 // ===== استيراد الحضور من CSV البصمة =====
@@ -4494,7 +4542,7 @@ async function startFetch(){
         // مطابقة مرنة (تجاهل المسافات وحالة الأحرف) لمنع تكرار نفس الموظف باسم فاضي
         if(!DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase())){
           const safeName = (name && String(name).trim()) ? String(name).trim() : ('موظف '+codeN);
-          DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل (1.5×)',ins:'غير مشمول',insAmt:0,st:'نشط'});addedEmps++;
+          DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل',ins:'غير مشمول',insAmt:0,st:'نشط'});addedEmps++;
         }
       });if(addedEmps>0){sv('emp',DB.emp);renderEmp();}
     }
@@ -5244,7 +5292,7 @@ async function autoSyncOnOpen(){
       const exists = DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase());
       if(!exists){
         const safeName = (name && String(name).trim()) ? String(name).trim() : ('موظف '+codeN);
-        DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل (1.5×)',ins:'غير مشمول',insAmt:0,st:'نشط'});
+        DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل',ins:'غير مشمول',insAmt:0,st:'نشط'});
         newEmps++;
       }
     });
