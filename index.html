@@ -2285,9 +2285,8 @@ function calcShiftOT(eid, dt){
   const dayRecs = DB.att.filter(a=>a.eid===eid&&a.dt===dt);
   if(!dayRecs.length) return 0;
 
-  const emp = DB.emp.find(e=>e.id===eid);
-
-  // مجموع ساعات العمل الفعلية
+  // مجموع كل شيفتات اليوم (حضور+انصراف لكل شيفت مسجّل في نفس اليوم)
+  // مثال: 8ص-4م (8 ساعات) + 5م-10م (5 ساعات) = 13 ساعة إجمالي
   let totalMins = 0;
   dayRecs.forEach(rec=>{
     if(rec.ti && rec.to){
@@ -2298,26 +2297,12 @@ function calcShiftOT(eid, dt){
     }
   });
 
-  // بداية OT = ميعاد الحضور + 8:30 (510 دقيقة)
-  if(emp?.workTime){
-    const[wh,wm]=emp.workTime.split(':').map(Number);
-    const otStartMins = wh*60+wm+510; // +8:30
-    // نجيب أول بصمة حضور في اليوم
-    const firstRec = dayRecs.find(r=>r.ti);
-    if(firstRec && firstRec.to){
-      const[h2,m2]=normalizeTime(firstRec.to).split(':').map(Number);
-      const toMins = h2*60+m2;
-      const otMins = toMins - otStartMins;
-      // OT = الوقت بعد بداية OT فقط
-      if(otMins > 0) return Number((otMins/60).toFixed(1));
-    }
-    return 0;
-  }
-
-  // fallback: مجموع الساعات - 8.5 (لو مفيش workTime)
-  const stdMins = Number(DB.rules?.['work_hrs']||8.5) * 60;
+  // الأوفرتايم = (إجمالي كل الشيفتات) - 8 ساعات ونص (510 دقيقة)
+  // القاعدة ثابتة بغض النظر عن عدد الشيفتات أو ميعاد الحضور —
+  // وقت العمل الفعلي المتفق عليه 8 ساعات، وهامش الأوفرتايم يبدأ بعد نص ساعة زيادة
+  const stdMins = 510; // 8:30
   const otMins = totalMins - stdMins;
-  return otMins > 0 ? Number((otMins/60).toFixed(1)) : 0;
+  return otMins > 0 ? Number((otMins/60).toFixed(2)) : 0;
 }
 
 // ===== حساب ساعات العمل والنقص =====
@@ -2625,7 +2610,7 @@ function renderAtt(){
     recs=recs.filter(a=>a.y===Number(y)&&a.m===Number(m));
   } else {
     recs=recs.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);
-  }const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;const tb=document.getElementById('at-body');if(!recs.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">fingerprint</span>لا سجلات</td></tr>';return}
+  }const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;const tb=document.getElementById('at-body');if(!recs.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">fingerprint</span>لا سجلات</td></tr>';return}
   const isAdmin=getSession()?.role==='admin';
   tb.innerHTML=recs.sort((a,b)=>b.dt.localeCompare(a.dt)).map(a=>{
     const e=DB.emp.find(x=>x.id===a.eid);const bg=a.st==='حضور'?'#dcfce7':a.st==='غياب بدون إذن'?'#ffe5e5':a.st==='إجازة اعتيادية'?'#f0edff':a.st==='راحة أسبوعية'?'#e0f2fe':a.st==='غياب بإذن'?'#fef3c7':'#fff7ed';const cl=a.st==='حضور'?'#16a34a':a.st==='غياب بدون إذن'?'#e03131':a.st==='إجازة اعتيادية'?'#7c3aed':a.st==='راحة أسبوعية'?'#0369a1':a.st==='غياب بإذن'?'#d97706':'#ea580c';return`<tr>
@@ -2751,8 +2736,9 @@ function saveAttEdit(attId){
 
   const ti = document.getElementById('att-ed-ti')?.value || '';
   const to = document.getElementById('att-ed-to')?.value || '';
-  const st = document.getElementById('att-ed-st')?.value || DB.att[idx].st;
+  const newSt = document.getElementById('att-ed-st')?.value || DB.att[idx].st;
   const nt = document.getElementById('att-ed-nt')?.value || '';
+  const oldSt = DB.att[idx].st;
 
   // حساب الساعات
   let hours = DB.att[idx].hours;
@@ -2770,20 +2756,33 @@ function saveAttEdit(attId){
     }
   }
 
+  // 1) نحفظ تعديل الوقت والملاحظة أولاً (بدون لمس الحالة لسه)
   DB.att[idx] = {
     ...DB.att[idx],
     ti: ti||DB.att[idx].ti,
     to: to||DB.att[idx].to,
-    st, nt, hours, ot,
+    nt, hours, ot,
     editedBy: session.name,
     editedAt: new Date().toISOString()
   };
-
   sv('att', DB.att);
+
+  // 2) لو الحالة اتغيّرت — لازم يمر على نفس منطق التحويل الموحّد
+  //    (convertAttStatus) اللي بيعالج رصيد الإجازات تلقائيًا —
+  //    نفس الدالة المستخدمة في تعديل كشف المرتبات، عشان مايبقاش
+  //    فيه منطقين مختلفين لنفس العملية
+  if(newSt !== oldSt){
+    convertAttStatus(attId, newSt);
+  } else {
+    logActivity('تعديل سجل حضور', `${DB.emp.find(e=>e.id===DB.att[idx].eid)?.nm} — ${DB.att[idx].dt}`);
+  }
+
   document.getElementById('att-edit-mo')?.remove();
-  logActivity('تعديل سجل حضور', `${DB.emp.find(e=>e.id===DB.att[idx].eid)?.nm} — ${DB.att[idx].dt}`);
   toast('✅ تم حفظ التعديل','success');
   renderAtt();
+  if(typeof renderLeave==='function') renderLeave();
+  if(typeof renderDash==='function') renderDash();
+  if(typeof renderPay==='function') renderPay();
 }
 
 function formatTime12(t){
@@ -4554,7 +4553,41 @@ function computeRestCycle(days, restDayNum){
 
 // ===== فحص شامل لشهر الدورة الحالية — دورة الـ6 أيام + إشعارات + متابعة الإجراءات =====
 // آمن للتكرار: لا يعيد إنشاء أي سجل موجود بالفعل، ولا يعدّل قرارًا يدويًا سابقًا
+// ===== ترحيل سجلات الإشعارات القديمة (من نسخة سابقة قبل توحيد الحالات بالعربي) =====
+// آمنة للتكرار — بتلمس بس السجلات القديمة، والسجلات الجديدة تفضل زي ما هي
+function migrateLegacyIssueRecords(){
+  let changed = false;
+  DB.issues.forEach(iss=>{
+    // ترحيل الحالة من الإنجليزي للعربي
+    if(iss.status==='pending'){ iss.status='بانتظار المراجعة'; changed=true; }
+    else if(iss.status==='resolved'){ iss.status='تمت الموافقة'; changed=true; }
+    else if(iss.status==='dismissed'){ iss.status='تم الاعتماد يدويًا'; changed=true; }
+
+    // ترحيل الحقول القديمة (action/resolvedBy/resolvedAt/dismissedBy/dismissedAt)
+    // للحقول الجديدة (suggestedAction/finalAction/decidedBy/decidedAt)
+    if(iss.finalAction===undefined && iss.action!==undefined){
+      iss.finalAction = iss.action; changed=true;
+    }
+    if(iss.decidedBy===undefined && (iss.resolvedBy!==undefined||iss.dismissedBy!==undefined)){
+      iss.decidedBy = iss.resolvedBy || iss.dismissedBy || null; changed=true;
+    }
+    if(iss.decidedAt===undefined && (iss.resolvedAt!==undefined||iss.dismissedAt!==undefined)){
+      iss.decidedAt = iss.resolvedAt || iss.dismissedAt || null; changed=true;
+    }
+
+    // تعبئة الحقول الناقصة لسجلات "غياب يحتاج مراجعة" القديمة
+    if(iss.type==='no_attendance'){
+      if(!iss.systemFinding){ iss.systemFinding='لم يتم تسجيل حضور أو انصراف، وليس يوم راحة مستحق'; changed=true; }
+      if(!iss.suggestedAction){ iss.suggestedAction='permitted'; changed=true; }
+    }
+    if(!iss.history){ iss.history=[]; changed=true; }
+  });
+  if(changed) sv('issues', DB.issues);
+  return changed;
+}
+
 function scanAttendanceIssues(){
+  migrateLegacyIssueRecords();
   const y = DB.cycle.y, m = DB.cycle.m;
   const todayStr = getCairoTodayStr();
   const daysInMonth = new Date(y, m, 0).getDate();
@@ -4590,9 +4623,10 @@ function scanAttendanceIssues(){
 
       // === تنظيف أي إشعار "يحتاج مراجعة" قديم لو بقى عنده سجل دلوقتي ===
       if(r.decision!=='needs_review'){
-        const oldIssue = DB.issues.find(i=>i.id==='iss_'+e.id+'_'+dt && i.status==='pending');
+        // بعد migrateLegacyIssueRecords كل الحالات المعلّقة بقت بالعربي
+        const oldIssue = DB.issues.find(i=>i.id==='iss_'+e.id+'_'+dt && i.status==='بانتظار المراجعة');
         if(oldIssue){
-          oldIssue.status='resolved'; oldIssue.finalAction=oldIssue.finalAction||'auto_matched';
+          oldIssue.status='تمت الموافقة'; oldIssue.finalAction=oldIssue.finalAction||oldIssue.suggestedAction||'auto_matched';
           oldIssue.decidedAt=new Date().toISOString(); oldIssue.decidedBy='نظام';
           issuesChanged = true;
         }
@@ -5811,6 +5845,28 @@ function viewTrackingDetail(id){
     ['تاريخ القرار', iss.decidedAt?new Date(iss.decidedAt).toLocaleString('ar-EG'):'—'],
   ];
 
+  // ===== أزرار اتخاذ الإجراء — نفس دوال جرس الإشعارات بالظبط (مصدر واحد للحقيقة) =====
+  const session = getSession();
+  const canAct = session && (session.role==='admin' || session.perms?.att_edit);
+  let actionsHtml = '';
+  if(canAct && iss.status==='بانتظار المراجعة'){
+    if(iss.type==='no_attendance'){
+      actionsHtml =
+        "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px'>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest_swap');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','permitted');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+        + "<button onclick=\"dismissAttIssue('"+iss.id+"');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0f4fc;color:#94a3b8'>تم بدون إجراء</button>"
+        + "</div>";
+    } else {
+      actionsHtml =
+        "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px'>"
+        + "<button onclick=\"dismissAttIssue('"+iss.id+"');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>موافقة على الإجراء</button>"
+        + "</div>";
+    }
+  }
+
   mo.innerHTML =
     "<div class='mb' style='max-width:480px;max-height:88vh;overflow-y:auto;padding:0'>"
     + "<div style='background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:16px 20px;display:flex;align-items:center;gap:10px;position:sticky;top:0'>"
@@ -5824,6 +5880,7 @@ function viewTrackingDetail(id){
           + "<span style='color:#94a3b8'>"+l+"</span><span style='font-weight:700;color:#0d1b3e;text-align:left;max-width:60%'>"+v+"</span>"
           + "</div>"
         )).join('')
+    +   (actionsHtml ? ("<div style='font-size:11px;font-weight:800;color:#e03131;margin:14px 0 4px'>اتخاذ إجراء</div>"+actionsHtml) : (iss.status==='بانتظار المراجعة' ? "<div style='font-size:11px;color:#94a3b8;margin-top:10px'>لا تملك صلاحية اتخاذ إجراء على هذا العنصر</div>" : ''))
     +   "<div style='font-size:11px;font-weight:800;color:#0f2057;margin:14px 0 8px'>سجل التعديلات</div>"
     +   historyHtml
     + "</div>"
