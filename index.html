@@ -139,6 +139,10 @@ html,body{margin:0;padding:0;font-family:'Cairo',sans-serif;background:#f0f4ff;c
   .mb button{
     min-height: 40px;
   }
+
+  /* تاب متابعة الإجراءات — كروت بدل الجدول على الموبايل */
+  #track-table-wrap{ display:none !important; }
+  #track-cards{ display:flex !important; }
 }
 </style>
 <link id="pwa-manifest" rel="manifest" href="./manifest.json">
@@ -310,6 +314,7 @@ body.auth-mode {
     <div style="font-size:10px;font-weight:800;color:#94a3b8;padding:10px 10px 4px;text-transform:uppercase;letter-spacing:.06em;margin-top:4px">التقارير</div>
     <a class="ni" data-p="reports" href="#reports" onclick="go('reports');return false"><span class="ms">assessment</span>مركز التقارير</a>
     <a class="ni" data-p="archive" href="#archive" onclick="go('archive');return false"><span class="ms">inventory_2</span>الأرشيف</a>
+    <a class="ni" data-p="actiontracking" href="#actiontracking" onclick="go('actiontracking');return false"><span class="ms">fact_check</span>متابعة الإجراءات</a>
     <div style="font-size:10px;font-weight:800;color:#94a3b8;padding:12px 10px 4px;text-transform:uppercase;letter-spacing:.06em;margin-top:4px">المسؤولية المجتمعية</div>
     <a class="ni" data-p="leave" href="#leave" onclick="go('leave');return false"><span class="ms">beach_access</span>الإجازات الاعتيادية</a>
     <a class="ni" data-p="restdays" href="#restdays" onclick="go('restdays');return false"><span class="ms">event_available</span>الراحات الأسبوعية</a>
@@ -875,6 +880,78 @@ body.auth-mode {
 
   <!-- قائمة الأرشيفات -->
   <div id="archive-list" style="display:flex;flex-direction:column;gap:10px"></div>
+
+</div>
+
+<!-- ===== ACTION TRACKING PAGE (متابعة الإجراءات) ===== -->
+<div id="page-actiontracking" class="page" style="padding:22px">
+
+  <!-- Header -->
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px">
+    <div>
+      <h1 style="font-size:20px;font-weight:800;color:#0f2057;margin:0 0 4px">متابعة الإجراءات</h1>
+      <div style="font-size:12px;color:#94a3b8">سجل مركزي لكل ما اكتشفه واقترحه النظام، وما قرره المحاسب — سجل تدقيق كامل</div>
+    </div>
+    <button class="btn bg" onclick="resetActionTrackingFilters()"><span class="ms ms-sm">refresh</span>إعادة تعيين</button>
+  </div>
+
+  <!-- KPIs -->
+  <div id="track-kpis" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:18px"></div>
+
+  <!-- الفلاتر -->
+  <div style="background:#fff;border-radius:14px;padding:14px 16px;border:1px solid #eaeffa;margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+    <div>
+      <label class="fl">الموظف</label>
+      <select class="fi" id="track-f-emp" style="width:auto;min-width:150px" onchange="renderActionTracking()">
+        <option value="">كل الموظفين</option>
+      </select>
+    </div>
+    <div>
+      <label class="fl">كود الموظف</label>
+      <input class="fi" id="track-f-code" style="width:auto" placeholder="بحث بالكود..." oninput="renderActionTracking()"/>
+    </div>
+    <div>
+      <label class="fl">من تاريخ</label>
+      <input type="date" class="fi" id="track-f-from" style="width:auto" onchange="renderActionTracking()"/>
+    </div>
+    <div>
+      <label class="fl">إلى تاريخ</label>
+      <input type="date" class="fi" id="track-f-to" style="width:auto" onchange="renderActionTracking()"/>
+    </div>
+    <div>
+      <label class="fl">الحالة</label>
+      <select class="fi" id="track-f-status" style="width:auto" onchange="renderActionTracking()">
+        <option value="">كل الحالات</option>
+        <option value="بانتظار المراجعة">بانتظار المراجعة</option>
+        <option value="تمت الموافقة">تمت الموافقة</option>
+        <option value="تم التعديل">تم التعديل</option>
+        <option value="تم الاعتماد يدويًا">تم الاعتماد يدويًا</option>
+      </select>
+    </div>
+    <div>
+      <label class="fl">نوع الإجراء</label>
+      <select class="fi" id="track-f-type" style="width:auto" onchange="renderActionTracking()">
+        <option value="">كل الإجراءات</option>
+        <option value="راحة أسبوعية">راحة أسبوعية</option>
+        <option value="بدل راحة">بدل راحة</option>
+        <option value="نقص انصراف">نقص انصراف</option>
+        <option value="no_attendance">غياب يحتاج مراجعة</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- الجدول (Desktop) / الكروت (Mobile) -->
+  <div id="track-table-wrap" style="background:#fff;border-radius:14px;border:1px solid #eaeffa;overflow:hidden">
+    <div style="overflow-x:auto"><table class="dt" id="track-table">
+      <thead><tr>
+        <th>الموظف</th><th>الكود</th><th>القسم</th><th>التاريخ</th><th>نوع الإجراء</th>
+        <th>اقتراح النظام</th><th>القرار النهائي</th><th style="text-align:center">الحالة</th>
+        <th>المستخدم</th><th>تاريخ القرار</th><th></th>
+      </tr></thead>
+      <tbody id="track-body"></tbody>
+    </table></div>
+  </div>
+  <div id="track-cards" style="display:none;flex-direction:column;gap:10px"></div>
 
 </div>
 
@@ -1609,7 +1686,7 @@ const DB={
   leaves:JSON.parse(localStorage.getItem('zz_leaves')||'[]'),
   archives:JSON.parse(localStorage.getItem('zz_archives')||'[]'),
   issues:JSON.parse(localStorage.getItem('zz_issues')||'[]'),
-};const MAR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const PGS={dashboard:'لوحة التحكم',employees:'الموظفون',payroll:'كشف المرتبات',attendance:'الحضور والأوفرتايم',advances:'السلف والاستقطاعات',draws:'المسحوبات',rent:'الإيجارات الشهرية',formulas:'القواعد والإعدادات',charity:'وحدة الصدقات',reports:'مركز التقارير',leave:'الإجازات الاعتيادية',restdays:'الراحات الأسبوعية',loancheck:'استحقاق السلفة',archive:'الأرشيف'};// =====================================================
+};const MAR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const PGS={dashboard:'لوحة التحكم',employees:'الموظفون',payroll:'كشف المرتبات',attendance:'الحضور والأوفرتايم',advances:'السلف والاستقطاعات',draws:'المسحوبات',rent:'الإيجارات الشهرية',formulas:'القواعد والإعدادات',charity:'وحدة الصدقات',reports:'مركز التقارير',leave:'الإجازات الاعتيادية',restdays:'الراحات الأسبوعية',loancheck:'استحقاق السلفة',archive:'الأرشيف',actiontracking:'متابعة الإجراءات'};// =====================================================
 // Firebase Hybrid Sync — زمزم Payroll
 // localStorage (primary) + Firebase (cloud backup/sync)
 // =====================================================
@@ -2058,7 +2135,7 @@ function bar(id,pct){const b=document.getElementById(id);if(b)setTimeout(()=>b.s
 
 // ===================== ROUTER =====================
 function go(p){
-  if(!PGS[p])p='dashboard';document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));const el=document.getElementById('page-'+p);if(el)el.classList.add('active');document.querySelectorAll('.ni').forEach(a=>a.classList.toggle('on',a.dataset.p===p));document.getElementById('bc').textContent=PGS[p];if(location.hash!=='#'+p)history.pushState(null,'','#'+p);closeMob();const R={dashboard:renderDash,employees:renderEmp,payroll:renderPay,attendance:renderAtt,advances:renderAdv,draws:renderDraws,rent:renderRent,formulas:loadRules,charity:renderChr,reports:()=>renderReport(currentReport),leave:renderLeave,restdays:renderRestDays,loancheck:initLoanCheck,archive:renderArchivePage};if(R[p])R[p]();if(p==='reports')renderReport(currentReport);}
+  if(!PGS[p])p='dashboard';document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));const el=document.getElementById('page-'+p);if(el)el.classList.add('active');document.querySelectorAll('.ni').forEach(a=>a.classList.toggle('on',a.dataset.p===p));document.getElementById('bc').textContent=PGS[p];if(location.hash!=='#'+p)history.pushState(null,'','#'+p);closeMob();const R={dashboard:renderDash,employees:renderEmp,payroll:renderPay,attendance:renderAtt,advances:renderAdv,draws:renderDraws,rent:renderRent,formulas:loadRules,charity:renderChr,reports:()=>renderReport(currentReport),leave:renderLeave,restdays:renderRestDays,loancheck:initLoanCheck,archive:renderArchivePage,actiontracking:renderActionTracking};if(R[p])R[p]();if(p==='reports')renderReport(currentReport);}
 window.addEventListener('hashchange',()=>go(location.hash.replace('#','')||'dashboard'));// ===================== MOBILE =====================
 function toggleMob(){document.getElementById('sb').classList.toggle('mobile-open');document.getElementById('sb-overlay').classList.toggle('open')}
 function closeMob(){document.getElementById('sb').classList.remove('mobile-open');document.getElementById('sb-overlay').classList.remove('open')}
@@ -2567,8 +2644,11 @@ function renderAtt(){
       if(!a.ti||!a.to) return '<span style="color:#94a3b8">—</span>';
       const wb=calcWorkBalance(a.eid,a.dt);
       const bal=wb.balanceMins;
-      const hrs=Math.abs(Math.floor(bal/60));
-      const mins=Math.abs(bal%60);
+      // مهم: ناخد القيمة المطلقة الأول ثم نقسّمها لساعات/دقائق
+      // (Math.floor على رقم سالب زي -5 بيرجّع -1 غلط لو مقسمناه قبل الـ abs)
+      const absMin=Math.abs(bal);
+      const hrs=Math.floor(absMin/60);
+      const mins=absMin%60;
       const txt=(bal<0?'-':bal>0?'+':'')+hrs+'س'+String(mins).padStart(2,'0')+'د';
       const col=bal<0?'#e03131':bal>0?'#16a34a':'#94a3b8';
       return `<span style="font-size:11px;font-weight:700;color:${col}">${txt}</span>`;
@@ -4430,6 +4510,50 @@ function getCairoTodayStr(){
 
 // ===== فحص شامل لشهر الدورة الحالية — إنشاء راحات تلقائية وإشعارات غياب =====
 // آمن للتكرار: لا يعيد إنشاء أي سجل موجود بالفعل
+// ===== دورة استحقاق الراحة الأسبوعية (6 أيام محتسبة) — pure logic =====
+// لا تُغيّر معادلة بدل الراحة المالية — فقط تحدد "متى" يستحق الموظف
+// الراحة أو بدل الراحة، ثم تُستخدم نفس حالات att.st الموجودة أصلاً
+function computeRestCycle(days, restDayNum){
+  let counter = 0;
+  const results = [];
+  for(const day of days){
+    const { dt, dow, hasAttendance, hasCheckout, isLeave, existingStatus } = day;
+
+    if(existingStatus){
+      if(existingStatus==='حضور' || existingStatus==='إجازة اعتيادية') counter++;
+      else if(existingStatus==='راحة أسبوعية' || existingStatus==='يوم بدل راحة') counter=0;
+      results.push({dt, decision:'existing', status:existingStatus});
+      continue;
+    }
+
+    const isDesignatedRestDay = restDayNum>=0 && dow===restDayNum;
+    const dueForRest = counter>=6 && isDesignatedRestDay;
+
+    if(dueForRest){
+      if(hasAttendance){
+        results.push({dt, decision:'rest_worked', status:'يوم بدل راحة', needsCheckoutNotice: !hasCheckout});
+      } else {
+        results.push({dt, decision:'rest_due', status:'راحة أسبوعية'});
+      }
+      counter = 0;
+      continue;
+    }
+
+    if(hasAttendance){
+      counter++;
+      results.push({dt, decision:'work', status:'حضور', needsCheckoutNotice: !hasCheckout});
+    } else if(isLeave){
+      counter++;
+      results.push({dt, decision:'leave', status:'إجازة اعتيادية'});
+    } else {
+      results.push({dt, decision:'needs_review', status:null, suggestedAction:'permitted'});
+    }
+  }
+  return results;
+}
+
+// ===== فحص شامل لشهر الدورة الحالية — دورة الـ6 أيام + إشعارات + متابعة الإجراءات =====
+// آمن للتكرار: لا يعيد إنشاء أي سجل موجود بالفعل، ولا يعدّل قرارًا يدويًا سابقًا
 function scanAttendanceIssues(){
   const y = DB.cycle.y, m = DB.cycle.m;
   const todayStr = getCairoTodayStr();
@@ -4439,60 +4563,136 @@ function scanAttendanceIssues(){
   let attChanged = false;
   let issuesChanged = false;
 
-  for(let d=1; d<=daysInMonth; d++){
-    const dt = y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
-    if(dt > todayStr) break; // متفحصش أيام مستقبلية
+  activeEmps.forEach(e=>{
+    const restDayNum = (e.restDay!==undefined && e.restDay!=='') ? Number(e.restDay) : -1;
 
-    const dow = new Date(y, m-1, d).getDay(); // 0..6 — نفس ترقيم restDay
-
-    activeEmps.forEach(e=>{
-      const restDayNum = (e.restDay!==undefined && e.restDay!=='') ? Number(e.restDay) : -1;
-      const isRestToday = restDayNum>=0 && dow===restDayNum;
-
+    // بناء تسلسل الأيام من أول الدورة لحد النهاردة
+    const days = [];
+    for(let d=1; d<=daysInMonth; d++){
+      const dt = y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+      if(dt > todayStr) break;
+      const dow = new Date(y, m-1, d).getDay();
       const att = DB.att.find(a=>a.eid===e.id && a.dt===dt);
       const leaveRec = DB.leaves.find(l=>l.eid===e.id && l.status!=='ملغاة' && l.from<=dt && l.to>=dt);
-      const issueId = 'iss_'+e.id+'_'+dt;
-      const existingIssue = DB.issues.find(i=>i.id===issueId);
+      days.push({
+        dt, dow,
+        hasAttendance: !!(att && att.ti),
+        hasCheckout: !!(att && att.to),
+        isLeave: !!leaveRec,
+        existingStatus: att ? att.st : (leaveRec ? 'إجازة اعتيادية' : null)
+      });
+    }
 
-      // 1) لو في سجل حضور فعلي أو إجازة تغطي اليوم — مفيش مشكلة، ننظف أي إشعار قديم معلّق
-      if(att || leaveRec){
-        if(existingIssue && existingIssue.status==='pending'){
-          existingIssue.status = 'resolved';
-          existingIssue.action = existingIssue.action || 'auto_matched';
-          existingIssue.resolvedAt = new Date().toISOString();
-          existingIssue.resolvedBy = 'نظام';
+    const results = computeRestCycle(days, restDayNum);
+
+    results.forEach(r=>{
+      const dt = r.dt;
+
+      // === تنظيف أي إشعار "يحتاج مراجعة" قديم لو بقى عنده سجل دلوقتي ===
+      if(r.decision!=='needs_review'){
+        const oldIssue = DB.issues.find(i=>i.id==='iss_'+e.id+'_'+dt && i.status==='pending');
+        if(oldIssue){
+          oldIssue.status='resolved'; oldIssue.finalAction=oldIssue.finalAction||'auto_matched';
+          oldIssue.decidedAt=new Date().toISOString(); oldIssue.decidedBy='نظام';
+          issuesChanged = true;
+        }
+      }
+
+      if(r.decision==='rest_due'){
+        DB.att.push({
+          id: uid(), eid: e.id, dt, y, m, d:Number(dt.slice(8,10)),
+          ti:'', to:'', ot:0, ott:'', st:'راحة أسبوعية', nt:'',
+          isLate:false, source:'تلقائي', autoRest:true,
+          createdAt: new Date().toISOString()
+        });
+        attChanged = true;
+        // سجل متابعة إجراءات — تلقائي وواضح، بدون حاجة لموافقة (مفيش غموض)
+        const trackId = 'trk_'+e.id+'_'+dt;
+        if(!DB.issues.find(i=>i.id===trackId)){
+          DB.issues.push({
+            id: trackId, eid:e.id, dt, type:'راحة أسبوعية',
+            systemFinding:'الموظف أكمل 6 أيام عمل محتسبة، ولم يسجل حضورًا في يوم الراحة',
+            suggestedAction:'rest', executedAction:'rest', finalAction:'rest',
+            status:'تمت الموافقة', history:[],
+            createdAt:new Date().toISOString(), createdBy:'نظام',
+            decidedBy:'نظام', decidedAt:new Date().toISOString()
+          });
           issuesChanged = true;
         }
         return;
       }
 
-      // 2) يوم الراحة الأسبوعية بدون أي سجل — نسجلها راحة تلقائية
-      if(isRestToday){
-        DB.att.push({
-          id: uid(), eid: e.id, dt, y, m, d,
-          ti:'', to:'', ot:0, ott:'',
-          st:'راحة أسبوعية', nt:'', isLate:false,
-          source:'تلقائي', autoRest:true,
-          createdAt: new Date().toISOString()
-        });
-        attChanged = true;
+      if(r.decision==='rest_worked'){
+        const existAtt = DB.att.find(a=>a.eid===e.id&&a.dt===dt);
+        if(existAtt && existAtt.st!=='يوم بدل راحة'){
+          existAtt.st='يوم بدل راحة'; existAtt.nt=(existAtt.nt||'')+' — بدل راحة تلقائي';
+          attChanged = true;
+        }
+        const trackId = 'trk_'+e.id+'_'+dt;
+        let trk = DB.issues.find(i=>i.id===trackId);
+        if(!trk){
+          trk = {
+            id: trackId, eid:e.id, dt, type:'بدل راحة',
+            systemFinding:'الموظف أكمل 6 أيام عمل محتسبة، وسجل حضورًا في يوم الراحة المحدد له',
+            suggestedAction:'rest_swap', executedAction:'rest_swap', finalAction:'rest_swap',
+            status:'بانتظار المراجعة', history:[],
+            createdAt:new Date().toISOString(), createdBy:'نظام',
+            decidedBy:null, decidedAt:null
+          };
+          DB.issues.push(trk);
+          issuesChanged = true;
+        }
+        if(r.needsCheckoutNotice){
+          const coId = 'co_'+e.id+'_'+dt;
+          if(!DB.issues.find(i=>i.id===coId)){
+            DB.issues.push({
+              id:coId, eid:e.id, dt, type:'نقص انصراف',
+              systemFinding:'الموظف سجل حضورًا في يوم بدل الراحة ولم يسجل انصرافًا',
+              suggestedAction:'review_checkout', executedAction:null, finalAction:null,
+              status:'بانتظار المراجعة', history:[],
+              createdAt:new Date().toISOString(), createdBy:'نظام',
+              decidedBy:null, decidedAt:null
+            });
+            issuesChanged = true;
+          }
+        }
         return;
       }
 
-      // 3) يوم عمل بدون أي سجل — يحتاج مراجعة من المحاسب
-      if(!existingIssue){
-        DB.issues.push({
-          id: issueId, eid: e.id, dt, type:'no_attendance',
-          status:'pending', action:null,
-          createdAt: new Date().toISOString(),
-          createdBy:'نظام',
-          resolvedBy:null, resolvedAt:null,
-          dismissedBy:null, dismissedAt:null
-        });
-        issuesChanged = true;
+      if(r.decision==='work' && r.needsCheckoutNotice){
+        const coId = 'co_'+e.id+'_'+dt;
+        if(!DB.issues.find(i=>i.id===coId)){
+          DB.issues.push({
+            id:coId, eid:e.id, dt, type:'نقص انصراف',
+            systemFinding:'الموظف سجل حضورًا في '+dt+' ولم يسجل انصرافًا',
+            suggestedAction:'review_checkout', executedAction:null, finalAction:null,
+            status:'بانتظار المراجعة', history:[],
+            createdAt:new Date().toISOString(), createdBy:'نظام',
+            decidedBy:null, decidedAt:null
+          });
+          issuesChanged = true;
+        }
+        return;
+      }
+
+      if(r.decision==='needs_review'){
+        const issueId = 'iss_'+e.id+'_'+dt;
+        if(!DB.issues.find(i=>i.id===issueId)){
+          DB.issues.push({
+            id: issueId, eid: e.id, dt, type:'no_attendance',
+            systemFinding:'لم يتم تسجيل حضور أو انصراف، وليس يوم راحة مستحق',
+            suggestedAction:'permitted', executedAction:null, finalAction:null,
+            status:'بانتظار المراجعة', history:[],
+            createdAt: new Date().toISOString(), createdBy:'نظام',
+            decidedBy:null, decidedAt:null,
+            // للتوافق مع الكود القديم لعرض الإشعار الحالي
+            action:null
+          });
+          issuesChanged = true;
+        }
       }
     });
-  }
+  });
 
   if(attChanged) sv('att', DB.att);
   if(issuesChanged) sv('issues', DB.issues);
@@ -4501,7 +4701,7 @@ function scanAttendanceIssues(){
 
 // ===== عدد الإشعارات المعلّقة (يستخدم في النقطة الحمراء والعداد) =====
 function pendingNotifCount(){
-  const pendingIssues = DB.issues.filter(i=>i.status==='pending').length;
+  const pendingIssues = DB.issues.filter(i=>i.status==='بانتظار المراجعة').length;
   const endAdv = DB.adv.filter(a=>a.status==='نشط'&&Number(a.rem)<=Number(a.inst)).length;
   const absThis = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m&&a.st==='غياب بدون إذن').length;
   const now = new Date();
@@ -4565,36 +4765,56 @@ function showNotifications(){
     + "</div>"
   )).join('');
 
-  // === إشعارات الغياب المعلّقة ===
-  const pending = DB.issues.filter(i=>i.status==='pending').sort((a,b)=>a.dt.localeCompare(b.dt));
+  // === تنبيهات النظام المعلّقة (غياب / بدل راحة / نقص انصراف) ===
+  const pending = DB.issues.filter(i=>i.status==='بانتظار المراجعة').sort((a,b)=>a.dt.localeCompare(b.dt));
+
+  const typeMeta = {
+    'no_attendance': {icon:'warning', color:'#e03131', title:'تنبيه غياب يحتاج إجراء'},
+    'بدل راحة':      {icon:'swap_horiz', color:'#0369a1', title:'تسجيل بدل راحة تلقائي — يحتاج مراجعة'},
+    'نقص انصراف':    {icon:'schedule', color:'#d97706', title:'نقص تسجيل انصراف'}
+  };
 
   const issuesHtml = pending.map(iss=>{
     const emp = DB.emp.find(e=>e.id===iss.eid);
     const empName = emp ? emp.nm : 'موظف محذوف';
     const dateArabic = formatArabicDate(iss.dt);
-    const actionsHtml = canAct ? (
-      "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
-      + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest_swap')\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
-      + "<button onclick=\"resolveAttIssue('"+iss.id+"','permitted')\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
-      + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized')\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
-      + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
-      + "</div>"
-    ) : "<div style='font-size:11px;color:#94a3b8;margin-top:8px'>لا تملك صلاحية اتخاذ إجراء على هذا التنبيه</div>";
+    const meta = typeMeta[iss.type] || typeMeta['no_attendance'];
+
+    let actionsHtml = '';
+    if(canAct){
+      if(iss.type==='no_attendance'){
+        actionsHtml =
+          "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
+          + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest_swap')\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
+          + "<button onclick=\"resolveAttIssue('"+iss.id+"','permitted')\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
+          + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized')\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
+          + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+          + "</div>";
+      } else {
+        // بدل راحة / نقص انصراف — النظام نفّذ بالفعل أو ده تنبيه للمراجعة فقط
+        actionsHtml =
+          "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
+          + "<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>موافقة</button>"
+          + "</div>";
+      }
+    } else {
+      actionsHtml = "<div style='font-size:11px;color:#94a3b8;margin-top:8px'>لا تملك صلاحية اتخاذ إجراء على هذا التنبيه</div>";
+    }
 
     return (
       "<div style='background:#fff;border:1px solid #fecaca;border-radius:12px;padding:14px;margin-bottom:10px'>"
       + "<div style='display:flex;align-items:flex-start;gap:10px'>"
-      +   "<span class='ms' style='color:#e03131;font-size:20px'>warning</span>"
+      +   "<span class='ms' style='color:"+meta.color+";font-size:20px'>"+meta.icon+"</span>"
       +   "<div style='flex:1'>"
-      +     "<div style='font-size:13px;font-weight:800;color:#0f2057'>تنبيه غياب يحتاج إجراء</div>"
+      +     "<div style='font-size:13px;font-weight:800;color:#0f2057'>"+meta.title+"</div>"
       +     "<div style='font-size:12.5px;color:#4a5982;margin-top:4px'>"
       +       "الموظف: <strong>"+empName+"</strong><br/>"
       +       "التاريخ: <strong>"+dateArabic+"</strong><br/>"
-      +       "لم يتم تسجيل حضور أو انصراف — وليس يوم الراحة المحدد له"
+      +       (iss.systemFinding||'')
       +     "</div>"
       +     actionsHtml
       +   "</div>"
-      +   (canAct ? ("<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' title='إخفاء (تم)' style='background:#f0f4fc;color:#94a3b8;flex-shrink:0'>تم</button>") : "")
+      +   (canAct && iss.type==='no_attendance' ? ("<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' title='إخفاء (تم)' style='background:#f0f4fc;color:#94a3b8;flex-shrink:0'>تم</button>") : "")
       + "</div>"
       + "</div>"
     );
@@ -4611,9 +4831,14 @@ function showNotifications(){
     +   "<button onclick=\"document.getElementById('notif-panel-mo').remove()\" style='background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff'><span class='ms'>close</span></button>"
     + "</div>"
     + "<div style='padding:16px'>"
-    +   (pending.length ? ("<div style='font-size:11px;font-weight:800;color:#e03131;margin-bottom:8px'>تنبيهات غياب تحتاج إجراء ("+pending.length+")</div>"+issuesHtml) : '')
+    +   (pending.length ? ("<div style='font-size:11px;font-weight:800;color:#e03131;margin-bottom:8px'>تنبيهات تحتاج إجراء ("+pending.length+")</div>"+issuesHtml) : '')
     +   (alerts.length ? ("<div style='font-size:11px;font-weight:800;color:#94a3b8;margin:"+(pending.length?'16px':'0')+" 0 8px'>تنبيهات عامة</div>"+alertsHtml) : '')
     +   ((!pending.length && !alerts.length) ? nothingHtml : '')
+    + "</div>"
+    + "<div style='padding:10px 16px;border-top:1px solid #f0f4fc'>"
+    +   "<button onclick=\"document.getElementById('notif-panel-mo').remove();go('actiontracking')\" class='btn bg' style='width:100%'>"
+    +     "<span class='ms ms-sm'>fact_check</span> عرض كل الإجراءات في متابعة الإجراءات"
+    +   "</button>"
     + "</div>"
     + "</div>";
 
@@ -4621,14 +4846,14 @@ function showNotifications(){
   updateNotifDot();
 }
 
-// ===== تنفيذ إجراء على تنبيه غياب =====
+// ===== تنفيذ إجراء على تنبيه (نوع no_attendance بس بيحتاج اختيار) =====
 function resolveAttIssue(issueId, actionType){
   const session = getSession();
   if(!session || !(session.role==='admin' || session.perms?.att_edit)){
     toast('ليس لديك صلاحية اتخاذ إجراء','error'); return;
   }
   const iss = DB.issues.find(i=>i.id===issueId);
-  if(!iss || iss.status!=='pending'){ toast('تم التعامل مع هذا التنبيه بالفعل','info'); return; }
+  if(!iss || iss.status!=='بانتظار المراجعة'){ toast('تم التعامل مع هذا التنبيه بالفعل','info'); return; }
 
   const emp = DB.emp.find(e=>e.id===iss.eid);
   if(!emp){ toast('الموظف غير موجود','error'); return; }
@@ -4636,7 +4861,8 @@ function resolveAttIssue(issueId, actionType){
   // تحقّق نهائي: هل اتسجل سجل حضور لنفس اليوم من مكان تاني في الوقت ده؟ (منع تعارض)
   const alreadyAtt = DB.att.find(a=>a.eid===iss.eid && a.dt===iss.dt);
   if(alreadyAtt){
-    iss.status='resolved'; iss.action='auto_matched'; iss.resolvedAt=new Date().toISOString(); iss.resolvedBy=session.name;
+    iss.status='تمت الموافقة'; iss.finalAction=iss.finalAction||'auto_matched';
+    iss.decidedAt=new Date().toISOString(); iss.decidedBy=session.name;
     sv('issues', DB.issues);
     toast('تم تسجيل اليوم بالفعل من مكان آخر','info');
     refreshAfterIssueAction();
@@ -4648,6 +4874,8 @@ function resolveAttIssue(issueId, actionType){
     permitted: 'غياب بإذن',
     unauthorized: 'غياب بدون إذن'
   };
+
+  const actionLabels = {rest_swap:'بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية'};
 
   if(actionType==='leave'){
     // إجازة اعتيادية — بنفس منطق خصم الرصيد المستخدم في باقي النظام
@@ -4686,24 +4914,42 @@ function resolveAttIssue(issueId, actionType){
 
   sv('att', DB.att);
 
-  iss.status='resolved'; iss.action=actionType; iss.resolvedAt=new Date().toISOString(); iss.resolvedBy=session.name;
+  // تحديث سجل متابعة الإجراءات — نحتفظ بالاقتراح الأصلي ونسجل قرار المحاسب
+  const wasModified = iss.suggestedAction && iss.suggestedAction!==actionType;
+  iss.history = iss.history || [];
+  iss.history.push({from:iss.finalAction||iss.suggestedAction||null, to:actionType, by:session.name, at:new Date().toISOString()});
+  iss.finalAction = actionType;
+  iss.status = wasModified ? 'تم التعديل' : 'تمت الموافقة';
+  iss.decidedBy = session.name;
+  iss.decidedAt = new Date().toISOString();
   sv('issues', DB.issues);
 
-  logActivity('معالجة تنبيه غياب', emp.nm+' — '+iss.dt+' — '+actionType);
+  logActivity('معالجة تنبيه غياب', emp.nm+' — '+iss.dt+' — '+actionLabels[actionType]);
   toast('✅ تم تسجيل الإجراء بنجاح','success');
 
   refreshAfterIssueAction();
 }
 
-// ===== إخفاء تنبيه بدون إجراء (زر تم) =====
+// ===== موافقة/إخفاء تنبيه بدون تغيير الإجراء (زر تم / موافقة) =====
 function dismissAttIssue(issueId){
   const session = getSession();
   if(!session || !(session.role==='admin' || session.perms?.att_edit)){
     toast('ليس لديك صلاحية','error'); return;
   }
   const iss = DB.issues.find(i=>i.id===issueId);
-  if(!iss || iss.status!=='pending') return;
-  iss.status='dismissed'; iss.dismissedBy=session.name; iss.dismissedAt=new Date().toISOString();
+  if(!iss || iss.status!=='بانتظار المراجعة') return;
+
+  iss.history = iss.history || [];
+  if(iss.type==='no_attendance'){
+    // إخفاء بدون اختيار إجراء محدد
+    iss.status = 'تم الاعتماد يدويًا';
+  } else {
+    // موافقة على الإجراء اللي النظام نفّذه بالفعل (بدل راحة / نقص انصراف)
+    iss.status = 'تمت الموافقة';
+    iss.finalAction = iss.finalAction || iss.suggestedAction;
+  }
+  iss.decidedBy = session.name;
+  iss.decidedAt = new Date().toISOString();
   sv('issues', DB.issues);
   refreshAfterIssueAction();
 }
@@ -4714,6 +4960,7 @@ function refreshAfterIssueAction(){
   if(typeof renderAtt==='function') renderAtt();
   if(typeof renderPay==='function') renderPay();
   if(typeof renderLeave==='function') renderLeave();
+  if(typeof renderActionTracking==='function') renderActionTracking();
   updateNotifDot();
   // إعادة فتح لوحة الإشعارات محدّثة
   const wasOpen = document.getElementById('notif-panel-mo');
@@ -5385,6 +5632,202 @@ function viewArchive(id){
     + '</div>'
     + '<div style="padding:20px">'+bodyHtml+'</div>'
     + '</div>';
+
+  document.body.appendChild(mo);
+}
+
+// =====================================================
+// تاب متابعة الإجراءات — سجل تدقيق مركزي (Audit Log)
+// يقرأ من DB.issues مباشرة (نفس مصدر الإشعارات) —
+// لا يوجد جدول موازٍ، ولا حساب مختلف عن أي مكان آخر
+// =====================================================
+
+// ===== تحقق الصلاحية (مستقلة عن صلاحية تنفيذ الإجراء) =====
+function canViewActionTracking(){
+  const session = getSession();
+  if(!session) return false;
+  if(session.role==='admin') return true;
+  return session.perms?.view_action_tracking === true;
+}
+
+function resetActionTrackingFilters(){
+  ['track-f-emp','track-f-code','track-f-from','track-f-to','track-f-status','track-f-type'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
+  renderActionTracking();
+}
+
+function trackingActionLabel(a){
+  const labels = {
+    rest:'راحة', rest_swap:'بدل راحة', permitted:'غياب بإذن',
+    unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية',
+    review_checkout:'مراجعة الانصراف', auto_matched:'مطابق تلقائيًا', null:'—'
+  };
+  return labels[a] || a || '—';
+}
+
+function renderActionTracking(){
+  const wrap = document.getElementById('track-table-wrap');
+  const cardsWrap = document.getElementById('track-cards');
+  const kpiEl = document.getElementById('track-kpis');
+  if(!wrap || !kpiEl) return;
+
+  // ===== فرض الصلاحية على مستوى البيانات نفسها (مش بس إخفاء الرابط) =====
+  if(!canViewActionTracking()){
+    kpiEl.innerHTML = '';
+    wrap.innerHTML = '<div style="text-align:center;padding:50px;color:#94a3b8">'
+      + '<span class="ms ms-xl" style="display:block;margin-bottom:10px;color:#e03131">lock</span>'
+      + 'ليس لديك صلاحية عرض هذا التاب — تواصل مع الأدمن</div>';
+    if(cardsWrap) cardsWrap.style.display='none';
+    return;
+  }
+
+  // تعبئة قائمة الموظفين لو أول مرة
+  const empSel = document.getElementById('track-f-emp');
+  if(empSel && empSel.options.length<=1){
+    empSel.innerHTML = '<option value="">كل الموظفين</option>'
+      + DB.emp.map(e=>'<option value="'+e.id+'">'+e.nm+'</option>').join('');
+  }
+
+  const fEmp    = document.getElementById('track-f-emp')?.value||'';
+  const fCode   = (document.getElementById('track-f-code')?.value||'').trim().toLowerCase();
+  const fFrom   = document.getElementById('track-f-from')?.value||'';
+  const fTo     = document.getElementById('track-f-to')?.value||'';
+  const fStatus = document.getElementById('track-f-status')?.value||'';
+  const fType   = document.getElementById('track-f-type')?.value||'';
+
+  let list = DB.issues.slice();
+
+  if(fEmp)    list = list.filter(i=>i.eid===fEmp);
+  if(fCode)   list = list.filter(i=>{ const e=DB.emp.find(x=>x.id===i.eid); return e && String(e.cd||'').toLowerCase().includes(fCode); });
+  if(fFrom)   list = list.filter(i=>i.dt>=fFrom);
+  if(fTo)     list = list.filter(i=>i.dt<=fTo);
+  if(fStatus) list = list.filter(i=>i.status===fStatus);
+  if(fType)   list = list.filter(i=>i.type===fType);
+
+  list.sort((a,b)=> b.dt.localeCompare(a.dt) || b.createdAt?.localeCompare(a.createdAt||'')||0);
+
+  // ===== KPIs (من النتيجة المفلترة الحالية) =====
+  const total    = list.length;
+  const pending  = list.filter(i=>i.status==='بانتظار المراجعة').length;
+  const approved = list.filter(i=>i.status==='تمت الموافقة').length;
+  const modified = list.filter(i=>i.status==='تم التعديل').length;
+
+  kpiEl.innerHTML =
+    kpiCard('list_alt','إجمالي الإجراءات',total,'#0f2057','#eef2ff')
+    + kpiCard('hourglass_empty','بانتظار المراجعة',pending,'#d97706','#fef3c7')
+    + kpiCard('check_circle','تمت الموافقة',approved,'#16a34a','#dcfce7')
+    + kpiCard('edit_note','تم التعديل',modified,'#7c3aed','#f0edff');
+
+  const statusColor = {
+    'بانتظار المراجعة':'#d97706', 'تمت الموافقة':'#16a34a',
+    'تم التعديل':'#7c3aed', 'تم الاعتماد يدويًا':'#0369a1'
+  };
+  const statusBg = {
+    'بانتظار المراجعة':'#fef3c7', 'تمت الموافقة':'#dcfce7',
+    'تم التعديل':'#f0edff', 'تم الاعتماد يدويًا':'#e0f2fe'
+  };
+
+  const isMobile = window.innerWidth < 768;
+
+  if(!list.length){
+    const emptyHtml = '<div style="text-align:center;padding:40px;color:#94a3b8">لا توجد إجراءات مطابقة للفلتر</div>';
+    document.getElementById('track-body').innerHTML = '<tr><td colspan="11">'+emptyHtml+'</td></tr>';
+    if(cardsWrap) cardsWrap.innerHTML = emptyHtml;
+  } else {
+    document.getElementById('track-body').innerHTML = list.map(iss=>{
+      const e = DB.emp.find(x=>x.id===iss.eid);
+      const sc = statusColor[iss.status]||'#94a3b8';
+      const sb = statusBg[iss.status]||'#f0f4fc';
+      const typeLabel = iss.type==='no_attendance' ? 'غياب يحتاج مراجعة' : iss.type;
+      return '<tr>'
+        + '<td style="font-weight:700">'+(e?.nm||'موظف محذوف')+'</td>'
+        + '<td style="font-size:11px;color:#94a3b8">'+(e?.cd||'—')+'</td>'
+        + '<td><span style="background:#eef2ff;color:#0f2057;border-radius:6px;padding:2px 7px;font-size:11px">'+(e?.dp||'—')+'</span></td>'
+        + '<td style="font-size:12px">'+iss.dt+'</td>'
+        + '<td style="font-size:12px">'+typeLabel+'</td>'
+        + '<td style="font-size:12px;color:#4a5982">'+trackingActionLabel(iss.suggestedAction||iss.executedAction)+'</td>'
+        + '<td style="font-size:12px;font-weight:700;color:#0f2057">'+trackingActionLabel(iss.finalAction)+'</td>'
+        + '<td style="text-align:center"><span style="background:'+sb+';color:'+sc+';border-radius:8px;padding:3px 9px;font-size:11px;font-weight:700">'+iss.status+'</span></td>'
+        + '<td style="font-size:11.5px;color:#4a5982">'+(iss.decidedBy||'—')+'</td>'
+        + '<td style="font-size:11px;color:#94a3b8">'+(iss.decidedAt?new Date(iss.decidedAt).toLocaleString('ar-EG'):'—')+'</td>'
+        + '<td><button class="btn bg bs" onclick="viewTrackingDetail(\''+iss.id+'\')"><span class="ms ms-sm">visibility</span></button></td>'
+        + '</tr>';
+    }).join('');
+
+    if(cardsWrap){
+      cardsWrap.innerHTML = list.map(iss=>{
+        const e = DB.emp.find(x=>x.id===iss.eid);
+        const sc = statusColor[iss.status]||'#94a3b8';
+        const sb = statusBg[iss.status]||'#f0f4fc';
+        const typeLabel = iss.type==='no_attendance' ? 'غياب يحتاج مراجعة' : iss.type;
+        return '<div onclick="viewTrackingDetail(\''+iss.id+'\')" style="background:#fff;border-radius:12px;padding:14px;border:1px solid #eaeffa;cursor:pointer">'
+          + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">'
+          +   '<div><div style="font-weight:800;font-size:13px;color:#0f2057">'+(e?.nm||'موظف محذوف')+'</div>'
+          +   '<div style="font-size:11px;color:#94a3b8">'+(e?.cd||'—')+' — '+iss.dt+'</div></div>'
+          +   '<span style="background:'+sb+';color:'+sc+';border-radius:8px;padding:3px 9px;font-size:10.5px;font-weight:700">'+iss.status+'</span>'
+          + '</div>'
+          + '<div style="font-size:12px;color:#4a5982">'+typeLabel+' — '+trackingActionLabel(iss.finalAction||iss.suggestedAction)+'</div>'
+          + '</div>';
+      }).join('');
+    }
+  }
+
+  // إظهار الجدول أو الكروت حسب حجم الشاشة (CSS المسؤول عن التبديل الفعلي أيضًا)
+  if(cardsWrap) cardsWrap.style.display = isMobile ? 'flex' : 'none';
+  wrap.style.display = isMobile ? 'none' : 'block';
+}
+
+// ===== تفاصيل إجراء واحد =====
+function viewTrackingDetail(id){
+  const iss = DB.issues.find(i=>i.id===id);
+  if(!iss) return;
+  const e = DB.emp.find(x=>x.id===iss.eid);
+
+  document.getElementById('track-detail-mo')?.remove();
+  const mo = document.createElement('div');
+  mo.className='mo open'; mo.id='track-detail-mo';
+  mo.style.cssText='display:flex;z-index:500';
+
+  const historyHtml = (iss.history||[]).length ? (iss.history||[]).map(h=>(
+    '<div style="display:flex;justify-content:space-between;padding:7px 10px;background:#f8faff;border-radius:8px;margin-bottom:5px;font-size:11.5px">'
+    + '<span>'+trackingActionLabel(h.from)+' ← '+trackingActionLabel(h.to)+'</span>'
+    + '<span style="color:#94a3b8">'+(h.by||'')+' — '+new Date(h.at).toLocaleString('ar-EG')+'</span>'
+    + '</div>'
+  )).join('') : '<div style="color:#94a3b8;font-size:12px">لا يوجد تعديلات سابقة</div>';
+
+  const rows = [
+    ['الموظف', e?.nm||'موظف محذوف'],
+    ['الكود', e?.cd||'—'],
+    ['التاريخ المرتبط', iss.dt],
+    ['نوع الإجراء', iss.type==='no_attendance'?'غياب يحتاج مراجعة':iss.type],
+    ['ما اكتشفه النظام', iss.systemFinding||'—'],
+    ['اقتراح النظام', trackingActionLabel(iss.suggestedAction||iss.executedAction)],
+    ['قرار المحاسب', trackingActionLabel(iss.finalAction)],
+    ['الحالة', iss.status],
+    ['المستخدم', iss.decidedBy||'—'],
+    ['تاريخ الإنشاء', iss.createdAt?new Date(iss.createdAt).toLocaleString('ar-EG'):'—'],
+    ['تاريخ القرار', iss.decidedAt?new Date(iss.decidedAt).toLocaleString('ar-EG'):'—'],
+  ];
+
+  mo.innerHTML =
+    "<div class='mb' style='max-width:480px;max-height:88vh;overflow-y:auto;padding:0'>"
+    + "<div style='background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:16px 20px;display:flex;align-items:center;gap:10px;position:sticky;top:0'>"
+    +   "<span class='ms' style='color:#fff'>fact_check</span>"
+    +   "<div style='flex:1'><div style='font-size:14px;font-weight:800;color:#fff'>تفاصيل الإجراء</div></div>"
+    +   "<button onclick=\"document.getElementById('track-detail-mo').remove()\" style='background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff'><span class='ms'>close</span></button>"
+    + "</div>"
+    + "<div style='padding:16px'>"
+    +   rows.map(([l,v])=>(
+          "<div style='display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f4fc;font-size:12.5px'>"
+          + "<span style='color:#94a3b8'>"+l+"</span><span style='font-weight:700;color:#0d1b3e;text-align:left;max-width:60%'>"+v+"</span>"
+          + "</div>"
+        )).join('')
+    +   "<div style='font-size:11px;font-weight:800;color:#0f2057;margin:14px 0 8px'>سجل التعديلات</div>"
+    +   historyHtml
+    + "</div>"
+    + "</div>";
 
   document.body.appendChild(mo);
 }
@@ -6853,6 +7296,12 @@ function applyPerms(user){
       if(nav) nav.style.display='none';
     }
   });
+
+  // متابعة الإجراءات — صلاحية مستقلة افتراضيًا معطّلة (Opt-in)، منفصلة عن صلاحية تنفيذ الإجراءات
+  if(perms.view_action_tracking !== true){
+    const trackNav = document.querySelector(`[data-p="actiontracking"]`);
+    if(trackNav) trackNav.style.display='none';
+  }
 }
 
 function logout(){
@@ -7119,6 +7568,14 @@ function showUserForm(u=null){
           ${label}
         </label>`).join('')}
       </div>
+      <div style="background:#fff7ed;border-radius:10px;padding:12px;border:1px solid #fed7aa">
+        <div style="font-size:11.5px;font-weight:700;color:#9a3412;margin-bottom:6px">صلاحية مستقلة — لوحة الإدارة</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px">
+          <input type="checkbox" id="uf-p-view_action_tracking" ${u?.perms?.view_action_tracking===true?'checked':''} style="accent-color:#d97706;width:15px;height:15px"/>
+          عرض تاب متابعة الإجراءات
+        </label>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:4px">منفصلة عن صلاحية اتخاذ الإجراءات نفسها — معطّلة افتراضيًا</div>
+      </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="btn bg" onclick="document.getElementById('user-form-mo').remove()">إلغاء</button>
         <button class="btn bn" onclick="saveUser()"><span class="ms ms-sm">save</span>حفظ</button>
@@ -7151,7 +7608,7 @@ async function saveUser(){
   if(!id&&!pass){ window._savingUser=false; toast('أدخل كلمة المرور','error'); return; }
 
   const perms = {};
-  ['employees','payroll','attendance','att_edit','advances','draws','rent','reports','formulas','leave','charity'].forEach(k=>{
+  ['employees','payroll','attendance','att_edit','advances','draws','rent','reports','formulas','leave','charity','view_action_tracking'].forEach(k=>{
     perms[k] = document.getElementById('uf-p-'+k)?.checked!==false;
   });
 
