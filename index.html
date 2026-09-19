@@ -1402,7 +1402,7 @@ body.auth-mode {
     <div><label class="fl">الموظف *</label><select class="fi" id="af-em"><option value="">اختر الموظف</option></select></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px">
       <div><label class="fl">التاريخ *</label><input class="fi" id="af-dt" type="date"/></div>
-      <div><label class="fl">الحالة</label><select class="fi" id="af-st"><option>حضور</option><option>غياب بإذن</option><option>غياب بدون إذن</option><option>إجازة رسمية</option><option>إجازة طارئة</option></select></div>
+      <div id="af-st-wrap"><label class="fl">الحالة</label><select class="fi" id="af-st"><option>حضور</option><option>غياب بإذن</option><option>غياب بدون إذن</option><option>إجازة رسمية</option><option>إجازة طارئة</option></select></div>
       <div><label class="fl">وقت الدخول</label><input class="fi" id="af-in" type="time"/></div>
       <div><label class="fl">وقت الخروج</label><input class="fi" id="af-out" type="time"/></div>
       <div><label class="fl">ساعات أوفرتايم</label><input class="fi" id="af-ot" type="number" step="0.5" placeholder="0"/></div>
@@ -1413,6 +1413,9 @@ body.auth-mode {
             <option value="day_extra">يوم عمل إضافي</option>
             <option value="day_rest">يوم بدل راحة</option>
           </select>
+        </div>
+        <div id="af-extra-note" style="display:none;background:#eef2ff;border-radius:8px;padding:8px 10px;font-size:11px;color:#0f2057;font-weight:600">
+          ℹ️ هذا يوم عمل إضافي — سيُضاف كبند مستقل في المرتب حسب قاعدة "يوم إضافي"، ولن يظهر كيوم حضور عادي
         </div>
         <div id="af-ot-days-wrap" style="display:none">
           <label class="fl">عدد الأيام الإضافية</label>
@@ -1642,6 +1645,12 @@ body.auth-mode {
           حساب الأوفرتايم تلقائياً (أكثر من 8 ساعات)
         </label>
       </div>
+
+      <!-- الاستيراد اللحظي -->
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;font-weight:700;color:#0f2057;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px">
+        <input type="checkbox" id="fetch-live-now" style="width:16px;height:16px;accent-color:#d97706"/>
+        ⚡ الاستيراد اللحظي — يجلب كل حضور وانصراف حتى هذه اللحظة بالضبط
+      </label>
 
       <!-- Progress -->
       <div id="fetch-progress" style="display:none">
@@ -2168,6 +2177,40 @@ function calculateIncludedSalaryBase(emp, ruleType='daily'){
 }
 
 // ===== تحويل حالة الحضور مع إعادة الحساب الفوري =====
+// ===== إزالة يوم واحد من سجل إجازة (بدل إلغاء السجل بالكامل لو كان متعدد الأيام) =====
+// لو السجل يوم واحد → يُلغى بالكامل
+// لو اليوم في أول/آخر النطاق → يُقصَّر السجل
+// لو اليوم في المنتصف → ينقسم السجل لسجلين
+function removeDayFromLeaveRecord(leaveRec, dt){
+  if(leaveRec.from === leaveRec.to){
+    leaveRec.status = 'ملغاة';
+    leaveRec.cancelledAt = new Date().toISOString();
+    leaveRec.cancelReason = 'تحويل حالة من كشف المرتبات';
+    return { removed: 'full' };
+  }
+  if(dt === leaveRec.from){
+    const next = new Date(leaveRec.from+'T00:00:00'); next.setDate(next.getDate()+1);
+    leaveRec.from = next.toISOString().slice(0,10);
+    leaveRec.days = Number(leaveRec.days) - 1;
+    return { removed: 'start' };
+  }
+  if(dt === leaveRec.to){
+    const prev = new Date(leaveRec.to+'T00:00:00'); prev.setDate(prev.getDate()-1);
+    leaveRec.to = prev.toISOString().slice(0,10);
+    leaveRec.days = Number(leaveRec.days) - 1;
+    return { removed: 'end' };
+  }
+  const beforeEnd = new Date(dt+'T00:00:00'); beforeEnd.setDate(beforeEnd.getDate()-1);
+  const afterStart = new Date(dt+'T00:00:00'); afterStart.setDate(afterStart.getDate()+1);
+  const beforeDays = Math.round((beforeEnd - new Date(leaveRec.from+'T00:00:00'))/86400000)+1;
+  const afterDays = Math.round((new Date(leaveRec.to+'T00:00:00') - afterStart)/86400000)+1;
+  const originalTo = leaveRec.to;
+  leaveRec.to = beforeEnd.toISOString().slice(0,10);
+  leaveRec.days = beforeDays;
+  const newRec = {...leaveRec, id: uid(), from: afterStart.toISOString().slice(0,10), to: originalTo, days: afterDays, createdAt:new Date().toISOString()};
+  return { removed: 'middle', newRec };
+}
+
 function convertAttStatus(attId, newStatus, opts={}){
   const idx = DB.att.findIndex(a=>a.id===attId);
   if(idx<0){ toast('السجل غير موجود','error'); return false; }
@@ -2180,13 +2223,12 @@ function convertAttStatus(attId, newStatus, opts={}){
   if(oldStatus === newStatus){ toast('الحالة لم تتغير','info'); return false; }
 
   // === إعادة رصيد الإجازة لو كانت إجازة اعتيادية ===
+  // (بيوم واحد بالظبط — حتى لو كان السجل الأصلي متعدد الأيام، بيتقسم صح)
   if(oldStatus === 'إجازة اعتيادية'){
     const leaveRec = DB.leaves.find(l=>l.eid===rec.eid&&l.from<=rec.dt&&l.to>=rec.dt&&l.status!=='ملغاة');
     if(leaveRec){
-      const lIdx = DB.leaves.indexOf(leaveRec);
-      DB.leaves[lIdx].status = 'ملغاة';
-      DB.leaves[lIdx].cancelledAt = new Date().toISOString();
-      DB.leaves[lIdx].cancelReason = 'تحويل حالة من كشف المرتبات';
+      const result = removeDayFromLeaveRecord(leaveRec, rec.dt);
+      if(result.newRec) DB.leaves.push(result.newRec);
       sv('leaves', DB.leaves);
     }
   }
@@ -2583,7 +2625,13 @@ function openAttMo(){document.getElementById('af-dt').value=new Date().toISOStri
 function saveAtt(){
   const eid=document.getElementById('af-em').value;if(!eid){toast('اختر الموظف','error');return}
   const dt=document.getElementById('af-dt').value;if(!dt){toast('التاريخ مطلوب','error');return}
-  const[yr,mn,dy]=dt.split('-');const lateMin=Number(document.getElementById('af-late')?.value||0);const rec={id:uid(),eid,dt,y:Number(yr),m:Number(mn),d:Number(dy),ti:document.getElementById('af-in').value,to:document.getElementById('af-out').value,ot:Number(document.getElementById('af-ot').value||0),ott:document.getElementById('af-ott').value,st:document.getElementById('af-st').value,nt:document.getElementById('af-nt').value,lateMin,isLate:lateMin>gr('lt_gr',15)};DB.att.push(rec);sv('att',DB.att);document.getElementById('att-mo').classList.remove('open');toast('تم تسجيل الحضور','success');renderAtt();renderDash();}
+  const[yr,mn,dy]=dt.split('-');const lateMin=Number(document.getElementById('af-late')?.value||0);
+  const ott=document.getElementById('af-ott').value;
+  // يوم عمل إضافي: بند مرتب إضافي بحت — مش يوم حضور عادي، عشان ميتحسبش غلط
+  // ضمن دورة الراحة الأسبوعية ولا يتلخبط مع سجل حضور حقيقي لنفس اليوم
+  const isExtraDay = ott==='day_extra';
+  const st = isExtraDay ? 'يوم عمل إضافي' : document.getElementById('af-st').value;
+  const rec={id:uid(),eid,dt,y:Number(yr),m:Number(mn),d:Number(dy),ti:document.getElementById('af-in').value,to:document.getElementById('af-out').value,ot:Number(document.getElementById('af-ot').value||0),ott,st,nt:document.getElementById('af-nt').value,lateMin,isLate:lateMin>gr('lt_gr',15)};DB.att.push(rec);sv('att',DB.att);document.getElementById('att-mo').classList.remove('open');toast(isExtraDay?'✅ تم تسجيل يوم عمل إضافي — سيُضاف كبند في المرتب':'تم تسجيل الحضور','success');renderAtt();renderDash();}
 function renderAtt(){
   // تعبئة قائمة الموظفين في at-ef
   const efEl = document.getElementById('at-ef');
@@ -2613,7 +2661,13 @@ function renderAtt(){
   }const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;const tb=document.getElementById('at-body');if(!recs.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">fingerprint</span>لا سجلات</td></tr>';return}
   const isAdmin=getSession()?.role==='admin';
   tb.innerHTML=recs.sort((a,b)=>b.dt.localeCompare(a.dt)).map(a=>{
-    const e=DB.emp.find(x=>x.id===a.eid);const bg=a.st==='حضور'?'#dcfce7':a.st==='غياب بدون إذن'?'#ffe5e5':a.st==='إجازة اعتيادية'?'#f0edff':a.st==='راحة أسبوعية'?'#e0f2fe':a.st==='غياب بإذن'?'#fef3c7':'#fff7ed';const cl=a.st==='حضور'?'#16a34a':a.st==='غياب بدون إذن'?'#e03131':a.st==='إجازة اعتيادية'?'#7c3aed':a.st==='راحة أسبوعية'?'#0369a1':a.st==='غياب بإذن'?'#d97706':'#ea580c';return`<tr>
+    const e=DB.emp.find(x=>x.id===a.eid);const bg=a.st==='حضور'?'#dcfce7':a.st==='غياب بدون إذن'?'#ffe5e5':a.st==='إجازة اعتيادية'?'#f0edff':a.st==='راحة أسبوعية'?'#e0f2fe':a.st==='غياب بإذن'?'#fef3c7':a.st==='يوم عمل إضافي'?'#e0e7ff':'#fff7ed';const cl=a.st==='حضور'?'#16a34a':a.st==='غياب بدون إذن'?'#e03131':a.st==='إجازة اعتيادية'?'#7c3aed':a.st==='راحة أسبوعية'?'#0369a1':a.st==='غياب بإذن'?'#d97706':a.st==='يوم عمل إضافي'?'#4338ca':'#ea580c';
+    // تمييز يوم الراحة الأسبوعية المحدد للموظف بلون أصفر — حسب يوم كل موظف تحديدًا
+    const rdN=(e&&e.restDay!==undefined&&e.restDay!=='')?Number(e.restDay):-1;
+    const [ry,rm,rdd]=a.dt.split('-').map(Number);
+    const isRestDow=rdN>=0 && new Date(ry,rm-1,rdd).getDay()===rdN;
+    const rowStyle=isRestDow?' style="background:#fffbeb"':'';
+    return`<tr${rowStyle}>
   <td style="font-weight:700">${e?.nm||'—'}</td>
   <td>${a.dt}</td>
   <td style="text-align:center;font-weight:600">
@@ -4284,7 +4338,13 @@ document.addEventListener('DOMContentLoaded',()=>{
   // print receipts select
   const printEmpSel=document.getElementById('print-emp-sel');if(printEmpSel) printEmpSel.addEventListener('change',renderReceipts);const attOtt=document.getElementById('af-ott');if(attOtt) attOtt.addEventListener('change',()=>{
     const isDays=attOtt.value==='day_extra'||attOtt.value==='day_rest';const wrap=document.getElementById('af-ot-days-wrap');const otLabel=document.querySelector('label[for="af-ot"]');if(wrap) wrap.style.display=isDays?'block':'none';// تغيير label ساعات/أيام
-    const otInput=document.getElementById('af-ot');if(otInput) otInput.placeholder=isDays?'عدد الأيام':'عدد الساعات';});});function handleAdvMonths(sel){
+    const otInput=document.getElementById('af-ot');if(otInput) otInput.placeholder=isDays?'عدد الأيام':'عدد الساعات';
+    // يوم عمل إضافي: نخفي حقل "الحالة" (هيتسجل تلقائي كبند مرتب مستقل)
+    const stWrap=document.getElementById('af-st-wrap');
+    if(stWrap) stWrap.style.display=(attOtt.value==='day_extra')?'none':'block';
+    const extraNote=document.getElementById('af-extra-note');
+    if(extraNote) extraNote.style.display=(attOtt.value==='day_extra')?'block':'none';
+  });});function handleAdvMonths(sel){
   const input=document.getElementById('advf-mn');if(sel.value==='none'){
     input.style.display='none';input.value=0;} else {
     input.style.display='block';input.value=input.value||6;}
@@ -4400,7 +4460,17 @@ async function startFetch(){
     // محاولة تانية
     await checkServer();if(!serverOnline){toast('شغّل ملف شغّل_السيرفر.bat أولاً ثم حاول مرة أخرى','error');return;}
   }
-  const month=Number(document.getElementById('fetch-month').value);const year =Number(document.getElementById('fetch-year').value);const importEmps=document.getElementById('fetch-import-emps').checked;const skipDup  =document.getElementById('fetch-skip-dup').checked;const calcOt   =document.getElementById('fetch-calc-ot').checked;// تحديث الـ UI
+  let month=Number(document.getElementById('fetch-month').value);let year =Number(document.getElementById('fetch-year').value);
+  // الاستيراد اللحظي: نجبر الشهر/السنة على شهر النهاردة الفعلي بتوقيت مصر
+  // (السيرفر أصلاً بيرجّع بيانات حية من الجهاز، فده بيضمن إننا بنطلب
+  //  الشهر الصحيح اللي فيه النهاردة حتى لو الأدمن ناسي يغيّر الاختيار)
+  const liveNow = document.getElementById('fetch-live-now')?.checked;
+  if(liveNow){
+    const todayCairo = getCairoTodayStr();
+    year = Number(todayCairo.slice(0,4));
+    month = Number(todayCairo.slice(5,7));
+  }
+  const importEmps=document.getElementById('fetch-import-emps').checked;const skipDup  =document.getElementById('fetch-skip-dup').checked;const calcOt   =document.getElementById('fetch-calc-ot').checked;// تحديث الـ UI
   const btn=document.getElementById('fetch-btn');btn.disabled=true;btn.innerHTML='<span class="ms ms-sm" style="animation:spin .8s linear infinite">refresh</span> جاري الجلب...';document.getElementById('fetch-result').style.display='none';setProgress(10,'🔌 جاري الاتصال بجهاز البصمة...');try{
     setProgress(30,'📡 متصل — جاري جلب البيانات...');const res=await fetch(`${SERVER_URL}/fetch?year=${year}&month=${month}`,{signal:AbortSignal.timeout(60000)});const data=await res.json();if(data.status!=='success'){
       toast('خطأ:'+data.message,'error');setProgress(0,'');btn.disabled=false;btn.innerHTML='<span class="ms ms-sm">download</span> جلب البيانات';return;}
@@ -4457,6 +4527,7 @@ async function startFetch(){
       });addedAtt++;});sv('att',DB.att);setProgress(100,'✅ اكتمل!');// عرض النتيجة
     const MONTHS_AR2=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];document.getElementById('fetch-result').style.display='block';document.getElementById('fetch-result-details').innerHTML=`
       <div>📅 الشهر:<strong>${MONTHS_AR2[month-1]} ${year}</strong></div>
+      ${liveNow?`<div>⚡ استيراد لحظي حتى:<strong>${new Date().toLocaleTimeString('ar-EG')}</strong></div>`:''}
       <div>👥 موظفون جدد أضيفوا:<strong>${addedEmps}</strong></div>
       <div>✅ سجلات حضور جديدة:<strong>${addedAtt}</strong></div>
       <div>⏭️ سجلات مكررة تجاهلها:<strong>${skippedAtt}</strong></div>
@@ -4735,7 +4806,12 @@ function scanAttendanceIssues(){
 
 // ===== عدد الإشعارات المعلّقة (يستخدم في النقطة الحمراء والعداد) =====
 function pendingNotifCount(){
-  const pendingIssues = DB.issues.filter(i=>i.status==='بانتظار المراجعة').length;
+  // الإشعارات خاصة بالشهر الحالي فقط
+  const pendingIssues = DB.issues.filter(i=>{
+    if(i.status!=='بانتظار المراجعة') return false;
+    const iy=Number(i.dt.slice(0,4)), im=Number(i.dt.slice(5,7));
+    return iy===DB.cycle.y && im===DB.cycle.m;
+  }).length;
   const endAdv = DB.adv.filter(a=>a.status==='نشط'&&Number(a.rem)<=Number(a.inst)).length;
   const absThis = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m&&a.st==='غياب بدون إذن').length;
   const now = new Date();
@@ -4767,6 +4843,14 @@ function formatArabicDate(dt){
   return DAYS_F[dow] + ' ' + d + ' ' + MONTHS_F[m-1] + ' ' + y;
 }
 
+// ===== الانتقال لتاب متابعة الإجراءات مفلتر على موظف معيّن =====
+function goToTrackingForEmployee(eid){
+  document.getElementById('notif-panel-mo')?.remove();
+  go('actiontracking');
+  const sel = document.getElementById('track-f-emp');
+  if(sel){ sel.value = eid; renderActionTracking(); }
+}
+
 // ===== عرض لوحة الإشعارات (نفس الجرس الحالي — عرض تفاعلي بدل alert) =====
 function showNotifications(){
   // فحص فوري عند فتح الجرس (يغطي حالة فتح البرنامج بعد الظهر)
@@ -4779,28 +4863,75 @@ function showNotifications(){
 
   const session = getSession();
   const canAct = session && (session.role==='admin' || session.perms?.att_edit);
+  const cy = DB.cycle.y, cm = DB.cycle.m;
 
-  // === التنبيهات العامة الموجودة أصلاً ===
-  const alerts = [];
-  const endAdv = DB.adv.filter(a=>a.status==='نشط'&&Number(a.rem)<=Number(a.inst));
-  if(endAdv.length) alerts.push({ic:'credit_card', c:'#d97706', bg:'#fef3c7', txt: endAdv.length+' سلفة تنتهي هذا الشهر'});
-  const absThis = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m&&a.st==='غياب بدون إذن');
-  if(absThis.length) alerts.push({ic:'alarm_off', c:'#e03131', bg:'#ffe5e5', txt: absThis.length+' حالة غياب بدون إذن'});
+  // === التنبيهات العامة — كل بند خاص بالشهر الحالي فقط، مفصّل بالموظف والتاريخ ===
+  const alertGroups = [];
+
+  // غياب بدون إذن — بند مستقل لكل موظف/يوم + رابط لمتابعة الإجراءات
+  const absRecs = DB.att.filter(a=>a.y===cy&&a.m===cm&&a.st==='غياب بدون إذن').sort((a,b)=>a.dt.localeCompare(b.dt));
+  if(absRecs.length){
+    alertGroups.push({
+      title:'غياب بدون إذن ('+absRecs.length+')', icon:'alarm_off', color:'#e03131', bg:'#ffe5e5',
+      items: absRecs.map(a=>{
+        const emp=DB.emp.find(e=>e.id===a.eid);
+        return {label:(emp?.nm||'موظف محذوف')+' — '+formatArabicDate(a.dt), eid:a.eid};
+      })
+    });
+  }
+
+  // سلف تنتهي هذا الشهر — بند لكل موظف
+  const endAdvRecs = DB.adv.filter(a=>a.status==='نشط'&&Number(a.rem)<=Number(a.inst));
+  if(endAdvRecs.length){
+    alertGroups.push({
+      title:'سلف تنتهي هذا الشهر ('+endAdvRecs.length+')', icon:'credit_card', color:'#d97706', bg:'#fef3c7',
+      items: endAdvRecs.map(a=>{
+        const emp=DB.emp.find(e=>e.id===a.eid);
+        return {label:(emp?.nm||'موظف محذوف')+' — آخر قسط', eid:a.eid, nav:'advances'};
+      })
+    });
+  }
+
+  // عقود إيجار تنتهي خلال 30 يوم
   const now2 = new Date();
-  const renew = DB.rent.filter(r=>{ if(!r.endDate||r.status!=='نشط') return false; const dd=(new Date(r.endDate)-now2)/(1000*60*60*24); return dd>=0&&dd<=30; });
-  if(renew.length) alerts.push({ic:'apartment', c:'#7c3aed', bg:'#f0edff', txt: renew.length+' عقد إيجار ينتهي خلال 30 يوم'});
-  const lowLeave = DB.emp.filter(e=>{ const used=DB.leaves.filter(l=>l.eid===e.id&&l.year===DB.cycle.y&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0); return (Number(e.leaveBal||30)-used)<=5; });
-  if(lowLeave.length) alerts.push({ic:'beach_access', c:'#0369a1', bg:'#e0f2fe', txt: lowLeave.length+' موظف رصيد إجازاتهم أقل من 5 أيام'});
+  const renewRecs = DB.rent.filter(r=>{ if(!r.endDate||r.status!=='نشط') return false; const dd=(new Date(r.endDate)-now2)/(1000*60*60*24); return dd>=0&&dd<=30; });
+  if(renewRecs.length){
+    alertGroups.push({
+      title:'عقود إيجار تنتهي خلال 30 يوم ('+renewRecs.length+')', icon:'apartment', color:'#7c3aed', bg:'#f0edff',
+      items: renewRecs.map(r=>({label:(r.owner||r.unit||'عقد')+' — ينتهي '+r.endDate, nav:'rent'}))
+    });
+  }
 
-  const alertsHtml = alerts.map(a=>(
-    "<div style='display:flex;align-items:center;gap:10px;padding:10px 12px;background:"+a.bg+";border-radius:10px;margin-bottom:8px'>"
-    + "<span class='ms ms-sm' style='color:"+a.c+"'>"+a.ic+"</span>"
-    + "<span style='font-size:12px;font-weight:700;color:#0d1b3e'>"+a.txt+"</span>"
+  // رصيد إجازات منخفض
+  const lowLeaveRecs = DB.emp.filter(e=>{ const used=DB.leaves.filter(l=>l.eid===e.id&&l.year===cy&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0); return (Number(e.leaveBal||30)-used)<=5; });
+  if(lowLeaveRecs.length){
+    alertGroups.push({
+      title:'رصيد إجازات منخفض ('+lowLeaveRecs.length+')', icon:'beach_access', color:'#0369a1', bg:'#e0f2fe',
+      items: lowLeaveRecs.map(e=>({label:e.nm, eid:e.id, nav:'leave'}))
+    });
+  }
+
+  const alertsHtml = alertGroups.map(g=>(
+    "<div style='margin-bottom:12px'>"
+    + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:6px'>"
+    +   "<span class='ms ms-sm' style='color:"+g.color+"'>"+g.icon+"</span>"
+    +   "<span style='font-size:12px;font-weight:800;color:#0d1b3e'>"+g.title+"</span>"
+    + "</div>"
+    + g.items.map(it=>(
+        "<div onclick=\""+(it.eid?("goToTrackingForEmployee('"+it.eid+"')"):(it.nav?("document.getElementById('notif-panel-mo').remove();go('"+it.nav+"')"):''))+"\" style='display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:"+g.bg+";border-radius:9px;margin-bottom:5px;cursor:pointer'>"
+        + "<span style='font-size:12px;font-weight:700;color:#0d1b3e'>"+it.label+"</span>"
+        + (it.eid?"<span class='ms ms-sm' style='color:"+g.color+"'>chevron_left</span>":'')
+        + "</div>"
+      )).join('')
     + "</div>"
   )).join('');
 
-  // === تنبيهات النظام المعلّقة (غياب / بدل راحة / نقص انصراف) ===
-  const pending = DB.issues.filter(i=>i.status==='بانتظار المراجعة').sort((a,b)=>a.dt.localeCompare(b.dt));
+  // === تنبيهات النظام المعلّقة (غياب / بدل راحة / نقص انصراف) — الشهر الحالي فقط ===
+  const pending = DB.issues.filter(i=>{
+    if(i.status!=='بانتظار المراجعة') return false;
+    const iy=Number(i.dt.slice(0,4)), im=Number(i.dt.slice(5,7));
+    return iy===cy && im===cm;
+  }).sort((a,b)=>a.dt.localeCompare(b.dt));
 
   const typeMeta = {
     'no_attendance': {icon:'warning', color:'#e03131', title:'تنبيه غياب يحتاج إجراء'},
@@ -4825,7 +4956,6 @@ function showNotifications(){
           + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
           + "</div>";
       } else {
-        // بدل راحة / نقص انصراف — النظام نفّذ بالفعل أو ده تنبيه للمراجعة فقط
         actionsHtml =
           "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
           + "<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>موافقة</button>"
@@ -4839,7 +4969,7 @@ function showNotifications(){
       "<div style='background:#fff;border:1px solid #fecaca;border-radius:12px;padding:14px;margin-bottom:10px'>"
       + "<div style='display:flex;align-items:flex-start;gap:10px'>"
       +   "<span class='ms' style='color:"+meta.color+";font-size:20px'>"+meta.icon+"</span>"
-      +   "<div style='flex:1'>"
+      +   "<div style='flex:1;cursor:pointer' onclick=\"goToTrackingForEmployee('"+iss.eid+"')\">"
       +     "<div style='font-size:13px;font-weight:800;color:#0f2057'>"+meta.title+"</div>"
       +     "<div style='font-size:12.5px;color:#4a5982;margin-top:4px'>"
       +       "الموظف: <strong>"+empName+"</strong><br/>"
@@ -4854,20 +4984,21 @@ function showNotifications(){
     );
   }).join('');
 
-  const nothingHtml = "<div style='text-align:center;padding:30px;color:#94a3b8'>لا توجد تنبيهات جديدة ✅</div>";
+  const totalCount = pending.length + alertGroups.reduce((s,g)=>s+g.items.length,0);
+  const nothingHtml = "<div style='text-align:center;padding:30px;color:#94a3b8'>لا توجد تنبيهات جديدة هذا الشهر ✅</div>";
 
   mo.innerHTML =
     "<div class='mb' style='max-width:480px;max-height:88vh;overflow-y:auto;padding:0'>"
     + "<div style='background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:16px 20px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:5'>"
     +   "<span class='ms' style='color:#fff;font-size:20px'>notifications</span>"
     +   "<div style='flex:1'><div style='font-size:14px;font-weight:800;color:#fff'>الإشعارات</div>"
-    +   "<div style='font-size:11px;color:#7dd8f5'>"+(pending.length+alerts.length)+" إشعار</div></div>"
+    +   "<div style='font-size:11px;color:#7dd8f5'>"+totalCount+" إشعار — "+MAR[cm-1]+" "+cy+"</div></div>"
     +   "<button onclick=\"document.getElementById('notif-panel-mo').remove()\" style='background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff'><span class='ms'>close</span></button>"
     + "</div>"
     + "<div style='padding:16px'>"
     +   (pending.length ? ("<div style='font-size:11px;font-weight:800;color:#e03131;margin-bottom:8px'>تنبيهات تحتاج إجراء ("+pending.length+")</div>"+issuesHtml) : '')
-    +   (alerts.length ? ("<div style='font-size:11px;font-weight:800;color:#94a3b8;margin:"+(pending.length?'16px':'0')+" 0 8px'>تنبيهات عامة</div>"+alertsHtml) : '')
-    +   ((!pending.length && !alerts.length) ? nothingHtml : '')
+    +   (alertGroups.length ? ("<div style='font-size:11px;font-weight:800;color:#94a3b8;margin:"+(pending.length?'16px':'0')+" 0 8px'>تنبيهات عامة</div>"+alertsHtml) : '')
+    +   ((!pending.length && !alertGroups.length) ? nothingHtml : '')
     + "</div>"
     + "<div style='padding:10px 16px;border-top:1px solid #f0f4fc'>"
     +   "<button onclick=\"document.getElementById('notif-panel-mo').remove();go('actiontracking')\" class='btn bg' style='width:100%'>"
@@ -6232,7 +6363,8 @@ function openPayrollMonthEdit(eid){
 
   const statusColor={
     'حضور':'#16a34a','راحة أسبوعية':'#0369a1','يوم بدل راحة':'#0284c7',
-    'إجازة اعتيادية':'#7c3aed','غياب بإذن':'#d97706','غياب بدون إذن':'#e03131','—':'#94a3b8'
+    'إجازة اعتيادية':'#7c3aed','غياب بإذن':'#d97706','غياب بدون إذن':'#e03131',
+    'يوم عمل إضافي':'#4338ca','—':'#94a3b8'
   };
 
   const MONTHS_ME=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
