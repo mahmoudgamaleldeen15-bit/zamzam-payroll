@@ -2014,7 +2014,9 @@ async function fbAutoDownloadChanges(fbTs){
           rules: 'قواعد الرواتب',
           cycle: 'دورة الرواتب',
           leaves:'إجازات',
-          rentArchive:'أرشيف الإيجارات'
+          rentArchive:'أرشيف الإيجارات',
+          archives:'الأرشيف',
+          issues:'إجراءات ومراجعات'
         }[k] || k;
         
         if(diff > 0)       changes.push(`➕ ${label}: ${diff} إضافة`);
@@ -2028,15 +2030,24 @@ async function fbAutoDownloadChanges(fbTs){
   localStorage.setItem('zz_lastSync', fbTs);
 
   if(changes.length > 0){
-    // تحديث الواجهة
-    renderDash();
-    if(typeof renderEmp  === 'function') renderEmp();
-    if(typeof renderPay  === 'function') renderPay();
-    if(typeof renderAtt  === 'function') renderAtt();
-    if(typeof renderAdv  === 'function') renderAdv();
+    // تحديث كل الصفحات — بغض النظر عن الصفحة المفتوحة حاليًا، عشان أي
+    // تعديل من أي جهاز يظهر فورًا على كل الأجهزة التانية بدون ما
+    // المستخدم يحتاج يتنقل بره الصفحة ويرجعلها يدويًا
+    if(typeof renderDash  === 'function') renderDash();
+    if(typeof renderEmp   === 'function') renderEmp();
+    if(typeof renderPay   === 'function') renderPay();
+    if(typeof renderAtt   === 'function') renderAtt();
+    if(typeof renderAdv   === 'function') renderAdv();
     if(typeof renderDraws === 'function') renderDraws();
     if(typeof renderLeave === 'function') renderLeave();
-    
+    if(typeof renderRestDays === 'function') renderRestDays();
+    if(typeof renderChr   === 'function') renderChr();
+    if(typeof renderRent  === 'function') renderRent();
+    if(typeof loadRules   === 'function') loadRules();
+    if(typeof renderArchivePage === 'function') renderArchivePage();
+    if(typeof renderActionTracking === 'function') renderActionTracking();
+    if(typeof updateNotifDot === 'function') updateNotifDot();
+
     // إشعار بالتغييرات
     showSyncChangesNotification(changes, fbTs);
   }
