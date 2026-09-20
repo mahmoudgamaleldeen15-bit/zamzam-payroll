@@ -586,6 +586,11 @@ body.auth-mode {
     <div class="kc"><div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:7px">قيمة الأوفرتايم</div><div id="at-otv" style="font-size:24px;font-weight:800;color:#0ea5a0">—</div><div style="font-size:11px;color:#94a3b8">ج.م</div></div>
     <div class="kc"><div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:7px">أيام الغياب</div><div id="at-ab" style="font-size:24px;font-weight:800;color:#e03131">—</div><div style="font-size:11px;color:#94a3b8">يوم بدون إذن</div></div>
     <div class="kc"><div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:7px">حالات التأخير</div><div id="at-lt" style="font-size:24px;font-weight:800;color:#d97706">—</div><div style="font-size:11px;color:#94a3b8">تجاوز الحد</div></div>
+    <div class="kc"><div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:7px">حضور</div><div id="at-present" style="font-size:24px;font-weight:800;color:#16a34a">—</div><div style="font-size:11px;color:#94a3b8">يوم</div></div>
+    <div class="kc"><div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:7px">غياب بإذن</div><div id="at-authabs" style="font-size:24px;font-weight:800;color:#d97706">—</div><div style="font-size:11px;color:#94a3b8">يوم</div></div>
+    <div class="kc"><div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:7px">راحات أسبوعية</div><div id="at-rest" style="font-size:24px;font-weight:800;color:#0369a1">—</div><div style="font-size:11px;color:#94a3b8">يوم</div></div>
+    <div class="kc"><div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:7px">بدل راحة</div><div id="at-restswap" style="font-size:24px;font-weight:800;color:#0284c7">—</div><div style="font-size:11px;color:#94a3b8">يوم</div></div>
+    <div class="kc"><div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:7px">إجازات اعتيادية</div><div id="at-leave" style="font-size:24px;font-weight:800;color:#7c3aed">—</div><div style="font-size:11px;color:#94a3b8">يوم</div></div>
   </div>
   <div style="background:#fff;border-radius:16px;border:1px solid #eaeffa;overflow:hidden">
     <div style="padding:11px 15px;background:#f5f8ff;border-bottom:1px solid #eaeffa;display:flex;align-items:center;justify-content:space-between;gap:11px;flex-wrap:wrap">
@@ -2822,6 +2827,12 @@ function renderAtt(){
   } else {
     recs=recs.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);
   }const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;
+  // كارتات الحالات الأخرى — نفس مصدر البيانات (recs) بالضبط عشان الأرقام تفضل متطابقة مع الجدول
+  const presentEl=document.getElementById('at-present');if(presentEl) presentEl.textContent=recs.filter(a=>a.st==='حضور').length;
+  const authAbsEl=document.getElementById('at-authabs');if(authAbsEl) authAbsEl.textContent=recs.filter(a=>a.st==='غياب بإذن').length;
+  const restEl=document.getElementById('at-rest');if(restEl) restEl.textContent=recs.filter(a=>a.st==='راحة أسبوعية').length;
+  const restSwapEl=document.getElementById('at-restswap');if(restSwapEl) restSwapEl.textContent=recs.filter(a=>a.st==='يوم بدل راحة').length;
+  const leaveEl=document.getElementById('at-leave');if(leaveEl) leaveEl.textContent=recs.filter(a=>a.st==='إجازة اعتيادية').length;
 
   // ===== عرض كل أيام الفترة المحددة — حتى الأيام اللي مالهاش سجل خالص =====
   // (بس لما يكون فيه موظف محدد؛ "كل الموظفين" يفضل زي ما هو تفاديًا لقائمة ضخمة)
@@ -4028,17 +4039,26 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected){
     </div>`;
 }function printReceipts(){
   const filterEid = document.getElementById('print-emp-sel')?.value || 'all';renderReceipts();// إضافة CSS للطباعة
+  document.getElementById('print-style-temp')?.remove();
   const style = document.createElement('style');style.id = 'print-style-temp';style.textContent = `
     @media print {
       body * { visibility:hidden !important;}
       #print-section, #print-section *,
-      #payslip-print-section, #payslip-print-section * { visibility:visible !important;}
+      #payslip-print-section, #payslip-print-section *,
+      #receipts-preview, #receipts-preview * { visibility:visible !important;}
       #receipts-preview { position:fixed;top:0;right:0;width:100%;}
       .receipt-card { page-break-after:always;border:none !important;border-radius:0 !important;}
       #sb-toggle, header { display:none !important;}
     }
-  `;document.head.appendChild(style);window.print();setTimeout(()=>{
-    const s = document.getElementById('print-style-temp');if(s) s.remove();}, 1000);}
+  `;document.head.appendChild(style);
+  // نشيل الـ CSS المؤقت بس بعد ما نافذة الطباعة فعليًا تتقفل — مش بتوقيت ثابت
+  // (عشان طباعة كل الموظفين اللي بتاخد وقت أطول متتأثرش لو استغرقت أكتر من ثانية)
+  const cleanup = ()=>{ document.getElementById('print-style-temp')?.remove(); window.removeEventListener('afterprint', cleanup); };
+  window.addEventListener('afterprint', cleanup);
+  window.print();
+  // شبكة أمان احتياطية لو المتصفح ما دعمش afterprint لأي سبب
+  setTimeout(cleanup, 15000);
+}
 
 // ===== نظام الإجازات المحسّن =====
 
