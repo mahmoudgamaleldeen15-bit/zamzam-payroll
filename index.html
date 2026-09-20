@@ -560,7 +560,7 @@ body.auth-mode {
         <div style="font-size:11.5px;color:#94a3b8;margin-top:2px">كل موظف في صفحة A4 منفصلة — الخانات الفارغة للمحاسب</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <select class="fi" id="print-emp-sel" style="width:auto;min-width:180px"><option value="all">كل الموظفين</option></select>
+        <select class="fi" id="print-emp-sel" style="width:auto;min-width:180px" onchange="renderReceipts()"><option value="all">كل الموظفين</option></select>
         <button class="btn bn" onclick="printReceipts()"><span class="ms ms-sm">print</span>طباعة الآن</button>
       </div>
     </div>
@@ -2898,7 +2898,7 @@ function renderAtt(){
   <td style="text-align:center"><span class="bd" style="background:${bg};color:${cl}">${isEmpty?'لا يوجد سجل':a.st}</span></td>
   <td style="text-align:center">
     <div style="display:flex;gap:3px;justify-content:center">
-      ${isEmpty?'<span style="color:#94a3b8;font-size:11px">—</span>':(isAdmin?`<button class="btn bg bs" onclick="openAttEdit('${a.id}')" title="تعديل" style="background:#eef2ff;color:#0f2057"><span class="ms ms-sm">edit</span></button>`:'')+(isAdmin?`<button class="btn bd2 bi bs" onclick="delAtt('${a.id}')" title="حذف"><span class="ms ms-sm">delete</span></button>`:'')+(!isAdmin?'<span style="color:#94a3b8;font-size:11px">—</span>':'')}
+      ${isEmpty?(isAdmin?`<button class="btn bg bs" onclick="openEmptyDayEdit('${a.eid}','${a.dt}')" title="تحديد حالة اليوم" style="background:#fffbeb;color:#d97706"><span class="ms ms-sm">edit_calendar</span></button>`:'<span style="color:#94a3b8;font-size:11px">—</span>'):(isAdmin?`<button class="btn bg bs" onclick="openAttEdit('${a.id}')" title="تعديل" style="background:#eef2ff;color:#0f2057"><span class="ms ms-sm">edit</span></button>`:'')+(isAdmin?`<button class="btn bd2 bi bs" onclick="delAtt('${a.id}')" title="حذف"><span class="ms ms-sm">delete</span></button>`:'')+(!isAdmin?'<span style="color:#94a3b8;font-size:11px">—</span>':'')}
     </div>
   </td>
 </tr>`;}).join('');}
@@ -2922,6 +2922,30 @@ function normalizeTime(t){
 
 
 // ===== تعديل سجل الحضور (للأدمن فقط) =====
+// ===== تحديد حالة يوم مالوش سجل خالص (من صف "لا يوجد سجل") =====
+// بننشئ سجل حقيقي بأقل افتراض ممكن، وبنفتح نفس نافذة التعديل الموجودة
+// عشان المحاسب يختار الحالة الفعلية (راحة/غياب بإذن/بدون إذن/إجازة/بدل راحة)
+function openEmptyDayEdit(eid, dt){
+  const session = getSession();
+  if(!session || session.role !== 'admin'){ toast('صلاحية مرفوضة','error'); return; }
+  const emp = DB.emp.find(e=>e.id===eid);
+  if(!emp){ toast('الموظف غير موجود','error'); return; }
+  // تأكد ما في سجل اتضاف لنفس اليوم من مكان تاني في نفس اللحظة (منع تكرار)
+  const already = DB.att.find(a=>a.eid===eid&&a.dt===dt);
+  if(already){ openAttEdit(already.id); return; }
+
+  const [y,m,d] = dt.split('-').map(Number);
+  const newRec = {
+    id: uid(), eid, dt, y, m, d,
+    ti:'', to:'', ot:0, ott:'',
+    st:'غياب بإذن', nt:'', isLate:false,
+    createdAt: new Date().toISOString()
+  };
+  DB.att.push(newRec);
+  sv('att', DB.att);
+  openAttEdit(newRec.id);
+}
+
 function openAttEdit(attId){
   const session = getSession();
   if(!session || session.role !== 'admin'){
@@ -3793,150 +3817,194 @@ function exportDrawsRepCSV(){
 // ===================== PRINT RECEIPTS =====================
 
 function renderReceipts(){
-  const sel = document.getElementById('print-emp-sel');const act = DB.emp.filter(e=>e.st==='نشط');// ملء الـ select
-  if(sel){
+  const sel = document.getElementById('print-emp-sel');const act = DB.emp.filter(e=>e.st==='نشط');
+  if(sel && sel.options.length<=1){
     sel.innerHTML = '<option value="all">كل الموظفين</option>' +
-      act.map(e=>`<option value="${e.id}">${e.nm} (${e.cd||''})</option>`).join('');}
+      act.map(e=>`<option value="${e.id}">${e.nm} (${e.cd||''})</option>`).join('');
+  }
+  const filterEid = sel?.value || 'all';
+  const emps = filterEid==='all' ? act : act.filter(e=>e.id===filterEid);
+  const container = document.getElementById('receipts-preview');
+  if(!container) return;
+  const MAR2=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const cycleLabel = `${MAR2[DB.cycle.m-1]} ${DB.cycle.y}`;
 
-  const filterEid = sel?.value || 'all';const emps = filterEid==='all' ? act :act.filter(e=>e.id===filterEid);const container = document.getElementById('receipts-preview');if(!container) return;const MAR2=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const cycleLabel = `${MAR2[DB.cycle.m-1]} ${DB.cycle.y}`;container.innerHTML = emps.map(emp=>{
-    const slip = calcSlip(emp);const allowArr = emp.allowances||[];const hasAllow = allowArr.length > 0;const hasIns = emp.ins==='مؤمَّن عليه' && slip.insEmp > 0;const advs = DB.adv.filter(a=>a.eid===emp.id&&a.status==='نشط');const hasAdv = advs.length > 0;const ini = (emp.nm||'?').trim().split(' ').map(w=>w[0]).slice(0,2).join('');return `
-    <div class="receipt-card" style="background:#fff;border:1px solid #e2eaf6;border-radius:16px;overflow:hidden;margin-bottom:18px;page-break-after:always">
-      
-      <!-- Header الإيصال -->
-      <div style="background:linear-gradient(135deg,#0f2057,#1e3a8a);padding:18px 22px;display:flex;align-items:center;justify-content:space-between">
+  container.innerHTML = emps.map(emp=>buildReceiptCard(emp, cycleLabel, filterEid!=='all')).join('');
+  reportData = emps;
+}
+
+// ===== بناء إيصال راتب واحد =====
+// الحقول اللي كانت لها قيم حقيقية (الأساسي، البدلات، التأمينات، السلفة) تفضل محسوبة زي ما هي.
+// باقي الحقول (ساعات إضافية، يوم إضافي، غياب، خصم نقدي، المسحوبات، الإجمالي، الصافي) نقاط فاضية
+// عمدًا — عشان المحاسب يملاها يدويًا وقت المطابقة، زي ما هو متفق عليه بالظبط. النقاط دي مش نقص،
+// دي تصميم مقصود، والتعديل هنا بيقتصر على تنظيم الشكل وترتيبه بشكل احترافي مقاس A4.
+function buildReceiptCard(emp, cycleLabel, isSingleSelected){
+  const slip = calcSlip(emp);
+  const allowArr = emp.allowances||[];
+  const ini = (emp.nm||'?').trim().split(' ').map(w=>w[0]).slice(0,2).join('');
+  const hasIns = emp.ins==='مؤمَّن عليه' && slip.insEmp > 0;
+  const advs = DB.adv.filter(a=>a.eid===emp.id&&a.status==='نشط');
+  const hasAdv = advs.length > 0;
+
+  const row = (label,val,color='#0f2057')=>`
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f4fc">
+      <span style="font-size:11.5px;color:#4a5982">${label}</span>
+      <span style="font-size:12px;font-weight:700;color:${color}">${fc(val)} ج.م</span>
+    </div>`;
+
+  // ===== بلوك فاضي للتعبئة اليدوية — عنوان + جدول (تاريخ | بيان | عمود القيمة) بصفوف فاضية =====
+  const blankBlock = (title, qtyLabel, rows=2)=>`
+    <div style="padding:6px 0;border-bottom:1px dashed #e2eaf6">
+      <div style="font-size:11.5px;font-weight:700;color:#0d1b3e;margin-bottom:3px">${title}</div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="font-size:9px;color:#94a3b8;text-align:right;font-weight:600;padding:2px 0;border-bottom:1px solid #eef1f8">التاريخ</th>
+          <th style="font-size:9px;color:#94a3b8;text-align:right;font-weight:600;padding:2px 4px;border-bottom:1px solid #eef1f8">البيان</th>
+          <th style="font-size:9px;color:#94a3b8;text-align:left;font-weight:600;padding:2px 0;border-bottom:1px solid #eef1f8">${qtyLabel}</th>
+        </tr></thead>
+        <tbody>
+          ${Array.from({length:rows}).map(()=>`<tr>
+            <td style="height:16px;border-bottom:1px dotted #e2eaf6"></td>
+            <td style="border-bottom:1px dotted #e2eaf6"></td>
+            <td style="border-bottom:1px dotted #e2eaf6"></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  const blankLine = (label)=>`
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #e2eaf6">
+      <span style="font-size:12px;color:#4a5982">${label}</span>
+      <span style="font-size:12px;color:#cbd5e1">.............. ج.م</span>
+    </div>`;
+
+  // ===== الاستحقاقات =====
+  let entitlementsHtml = row('الراتب الأساسي', slip.basic, '#0f2057');
+  entitlementsHtml += allowArr.map(a=>row(a.name||'بدل', Number(a.val||0), a.inCalc!==false?'#0ea5a0':'#d97706')).join('');
+  entitlementsHtml += blankBlock('ساعات إضافية', 'عدد الساعات');
+  entitlementsHtml += blankBlock('يوم عمل إضافي', 'عدد الأيام');
+
+  // ===== الاستقطاعات =====
+  let deductionsHtml = '';
+  if(hasIns) deductionsHtml += row('التأمينات الاجتماعية', slip.insEmp, '#e03131');
+  deductionsHtml += blankBlock('غياب بإذن', 'عدد الأيام');
+  deductionsHtml += blankBlock('غياب بدون إذن', 'عدد الأيام');
+  deductionsHtml += blankBlock('خصم نقدي', 'قيمة الخصم');
+  if(hasAdv) deductionsHtml += advs.map(a=>row(`سلفة نقدية${a.rs?' ('+a.rs+')':''}`, a.inst, '#e03131')).join('');
+  else deductionsHtml += blankLine('سلفة نقدية');
+
+  const selectedStyle = isSingleSelected ? 'border:2px solid #0ea5a0;box-shadow:0 0 0 4px #d1fae5' : 'border:1px solid #e2eaf6';
+
+  return `
+    <div class="receipt-card" style="background:#fff;${selectedStyle};border-radius:14px;overflow:hidden;margin-bottom:18px;page-break-after:always;max-width:210mm;margin-left:auto;margin-right:auto;font-family:'Cairo',sans-serif">
+
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#0f2057,#1e3a8a);padding:16px 20px;display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div style="font-family:'Cairo Play',sans-serif;font-size:17px;font-weight:800;color:#fff">زمزم <span style="color:#7dd8f5">Payroll</span></div>
-          <div style="font-size:11px;color:#93c5fd;margin-top:2px">إيصال راتب — ${cycleLabel}</div>
+          <div style="font-size:16px;font-weight:800;color:#fff">زمزم <span style="color:#7dd8f5">Payroll</span></div>
+          <div style="font-size:10.5px;color:#93c5fd;margin-top:2px">إيصال راتب — ${cycleLabel}</div>
         </div>
         <div style="text-align:left">
-          <div style="font-size:10.5px;color:#7dd8f5">رقم الإيصال</div>
-          <div style="font-size:12px;font-weight:800;color:#fff;direction:ltr">${emp.cd||'—'}-${DB.cycle.y}${String(DB.cycle.m).padStart(2,'0')}</div>
+          <div style="font-size:10px;color:#7dd8f5">رقم الإيصال</div>
+          <div style="font-size:11.5px;font-weight:800;color:#fff;direction:ltr">${emp.cd||'—'}-${DB.cycle.y}${String(DB.cycle.m).padStart(2,'0')}</div>
         </div>
       </div>
 
       <!-- بيانات الموظف -->
-      <div style="padding:14px 22px;background:#f8faff;border-bottom:2px dashed #e2eaf6;display:flex;align-items:center;gap:14px">
-        <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#0f2057,#0ea5a0);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#fff;flex-shrink:0">${ini}</div>
+      <div style="padding:12px 20px;background:#f8faff;border-bottom:2px dashed #e2eaf6;display:flex;align-items:center;gap:12px">
+        <div style="width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#0f2057,#0ea5a0);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#fff;flex-shrink:0">${ini}</div>
         <div style="flex:1">
-          <div style="font-size:15px;font-weight:800;color:#0f2057">${emp.nm||'—'}</div>
-          <div style="display:flex;gap:10px;margin-top:3px;flex-wrap:wrap">
-            <span style="font-size:11.5px;color:#4a5982">الكود:<strong>${emp.cd||'—'}</strong></span>
-            <span style="font-size:11.5px;color:#4a5982">القسم:<strong>${emp.dp||'—'}</strong></span>
-            <span style="font-size:11.5px;color:#4a5982">المسمى:<strong>${emp.ttl||'—'}</strong></span>
+          <div style="font-size:14px;font-weight:800;color:#0f2057">${emp.nm||'—'}</div>
+          <div style="display:flex;gap:10px;margin-top:2px;flex-wrap:wrap">
+            <span style="font-size:10.5px;color:#4a5982">الكود: <strong>${emp.cd||'—'}</strong></span>
+            <span style="font-size:10.5px;color:#4a5982">القسم: <strong>${emp.dp||'—'}</strong></span>
+            <span style="font-size:10.5px;color:#4a5982">المسمى: <strong>${emp.ttl||'—'}</strong></span>
           </div>
         </div>
         <div style="text-align:center">
-          <div style="font-size:10px;color:#94a3b8">دورة</div>
-          <div style="font-size:12px;font-weight:800;color:#0f2057">${cycleLabel}</div>
+          <div style="font-size:9.5px;color:#94a3b8">دورة</div>
+          <div style="font-size:11px;font-weight:800;color:#0f2057">${cycleLabel}</div>
         </div>
       </div>
 
-      <div style="padding:18px 22px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-          
-          <!-- العمود الأيمن:الاستحقاقات -->
+      <div style="padding:14px 20px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+
+          <!-- الاستحقاقات -->
           <div>
-            <div style="font-size:11px;font-weight:800;color:#0f2057;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;padding-bottom:5px;border-bottom:2px solid #0f2057">الاستحقاقات</div>
-            
-            <!-- الأساسي -->
-            <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0f4fc">
-              <span style="font-size:12.5px;color:#0d1b3e;font-weight:600">الراتب الأساسي</span>
-              <span style="font-size:13px;font-weight:800;color:#0f2057">${fc(slip.basic)} ج.م</span>
-            </div>
-
-            <!-- البدلات -->
-            ${hasAllow ? allowArr.map(a=>`
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f4fc">
-              <span style="font-size:12px;color:#4a5982">${a.name||'بدل'}</span>
-              <span style="font-size:12.5px;font-weight:700;color:#0ea5a0">${fc(Number(a.val||0))} ج.م</span>
-            </div>`).join('') :(Number(emp.al||0)>0?`
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f4fc">
-              <span style="font-size:12px;color:#4a5982">البدلات الثابتة</span>
-              <span style="font-size:12.5px;font-weight:700;color:#0ea5a0">${fc(emp.al)} ج.م</span>
-            </div>`:'') }
-
-            <!-- أوفرتايم — فاضي -->
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #e2eaf6">
-              <span style="font-size:12px;color:#4a5982">ساعات إضافية</span>
-              <span style="font-size:12px;color:#cbd5e1">.............. ج.م</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #e2eaf6">
-              <span style="font-size:12px;color:#4a5982">يوم إضافي</span>
-              <span style="font-size:12px;color:#cbd5e1">.............. ج.م</span>
-            </div>
-
-            <!-- إجمالي الاستحقاقات — فاضي للمحاسب -->
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;background:#f0fdf4;border-radius:8px;padding:8px 10px">
-              <span style="font-size:13px;font-weight:800;color:#15803d">إجمالي الاستحقاقات</span>
-              <span style="font-size:13px;color:#86efac;border-bottom:1.5px solid #86efac;min-width:100px;text-align:center">.............. ج.م</span>
+            <div style="font-size:10.5px;font-weight:800;color:#0f2057;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #0f2057">الاستحقاقات</div>
+            ${entitlementsHtml}
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;background:#f0fdf4;border-radius:7px;padding:7px 9px">
+              <span style="font-size:12px;font-weight:800;color:#15803d">إجمالي الاستحقاقات</span>
+              <span style="font-size:12px;color:#86efac;border-bottom:1.5px solid #86efac;min-width:90px;text-align:center">.............. ج.م</span>
             </div>
           </div>
 
-          <!-- العمود الأيسر:الاستقطاعات -->
+          <!-- الاستقطاعات -->
           <div>
-            <div style="font-size:11px;font-weight:800;color:#e03131;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;padding-bottom:5px;border-bottom:2px solid #e03131">الاستقطاعات</div>
-            
-            <!-- التأمينات — لو موجود -->
-            ${hasIns ? `
-            <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0f4fc">
-              <span style="font-size:12.5px;color:#0d1b3e;font-weight:600">التأمينات الاجتماعية</span>
-              <span style="font-size:13px;font-weight:800;color:#e03131">${fc(slip.insEmp)} ج.م</span>
-            </div>` :''}
+            <div style="font-size:10.5px;font-weight:800;color:#e03131;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #e03131">الاستقطاعات</div>
+            ${deductionsHtml}
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;background:#fff0f0;border-radius:7px;padding:7px 9px">
+              <span style="font-size:12px;font-weight:800;color:#e03131">إجمالي الاستقطاعات</span>
+              <span style="font-size:12px;color:#fca5a5;border-bottom:1.5px solid #fca5a5;min-width:90px;text-align:center">.............. ج.م</span>
+            </div>
+          </div>
+        </div>
 
-            <!-- السلفة — لو موجود -->
-            ${hasAdv ? advs.map(a=>`
-            <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0f4fc">
-              <span style="font-size:12px;color:#0d1b3e;font-weight:600">قسط سلفة (${a.rs||''})</span>
-              <span style="font-size:13px;font-weight:800;color:#e03131">${fc(a.inst)} ج.م</span>
-            </div>`).join('') :''}
-
-            <!-- خانات فاضية للمحاسب -->
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #e2eaf6">
-              <span style="font-size:12px;color:#4a5982">غياب بإذن</span>
-              <span style="font-size:12px;color:#cbd5e1">.............. ج.م</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #e2eaf6">
-              <span style="font-size:12px;color:#4a5982">غياب بدون إذن</span>
-              <span style="font-size:12px;color:#cbd5e1">.............. ج.م</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #e2eaf6">
-              <span style="font-size:12px;color:#4a5982">خصم نقدي</span>
-              <span style="font-size:12px;color:#cbd5e1">.............. ج.م</span>
-            </div>
-
-            <!-- إجمالي الاستقطاعات فاضي -->
-            <div style="display:flex;justify-content:space-between;padding:8px 10px;background:#fff0f0;border-radius:8px;margin-top:4px">
-              <span style="font-size:13px;font-weight:800;color:#e03131">إجمالي الاستقطاعات</span>
-              <span style="font-size:13px;color:#e03131">.............. ج.م</span>
-            </div>
+        <!-- المسحوبات الشهرية -->
+        <div style="margin-top:14px;padding-top:10px;border-top:1px dashed #e2eaf6">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:11px;font-weight:800;color:#0f2057">المسحوبات الشهرية</span>
+          </div>
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr>
+              <th style="font-size:9.5px;color:#94a3b8;text-align:right;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">التاريخ</th>
+              <th style="font-size:9.5px;color:#94a3b8;text-align:right;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">البيان</th>
+              <th style="font-size:9.5px;color:#94a3b8;text-align:left;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">القيمة</th>
+              <th style="font-size:9.5px;color:#94a3b8;text-align:right;padding:3px 6px;border-bottom:1.5px solid #e2eaf6;border-right:1px dashed #e2eaf6">التاريخ</th>
+              <th style="font-size:9.5px;color:#94a3b8;text-align:right;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">البيان</th>
+              <th style="font-size:9.5px;color:#94a3b8;text-align:left;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">القيمة</th>
+            </tr></thead>
+            <tbody>
+              ${Array.from({length:4}).map(()=>`<tr>
+                <td style="height:16px;border-bottom:1px dotted #e2eaf6"></td>
+                <td style="border-bottom:1px dotted #e2eaf6"></td>
+                <td style="border-bottom:1px dotted #e2eaf6"></td>
+                <td style="border-bottom:1px dotted #e2eaf6;border-right:1px dashed #e2eaf6"></td>
+                <td style="border-bottom:1px dotted #e2eaf6"></td>
+                <td style="border-bottom:1px dotted #e2eaf6"></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;align-items:center">
+            <span style="font-size:11px;font-weight:800;color:#e03131">إجمالي المسحوبات</span>
+            <span style="font-size:11px;color:#fca5a5;border-bottom:1.5px solid #fca5a5;min-width:90px;text-align:center">.............. ج.م</span>
           </div>
         </div>
 
         <!-- الصافي + التوقيع -->
-        <div style="margin-top:16px;border-top:2px dashed #e2eaf6;padding-top:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
-          <div style="background:linear-gradient(135deg,#0f2057,#0ea5a0);border-radius:10px;padding:12px;text-align:center">
-            <div style="font-size:10.5px;color:#7dd8f5;margin-bottom:4px">صافي المرتب</div>
-            <div style="font-size:11px;color:#b8d8f8;border-top:1px solid rgba(255,255,255,.2);padding-top:6px;margin-top:4px">........................</div>
-            <div style="font-size:9px;color:#7dd8f5;margin-top:3px">ج.م</div>
+        <div style="margin-top:14px;border-top:2px dashed #e2eaf6;padding-top:12px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px">
+          <div style="background:linear-gradient(135deg,#0f2057,#0ea5a0);border-radius:9px;padding:11px;text-align:center">
+            <div style="font-size:10px;color:#7dd8f5;margin-bottom:4px">صافي المرتب</div>
+            <div style="font-size:11px;color:#b8d8f8;border-top:1px solid rgba(255,255,255,.25);padding-top:5px;margin-top:3px">........................</div>
+            <div style="font-size:9px;color:#7dd8f5;margin-top:2px">ج.م</div>
           </div>
-          <div style="border:1.5px dashed #e2eaf6;border-radius:10px;padding:12px;text-align:center">
-            <div style="font-size:10.5px;color:#4a5982;margin-bottom:4px">توقيع الموظف</div>
-            <div style="height:28px;border-bottom:1px solid #e2eaf6;margin-top:12px"></div>
+          <div style="border:1.5px dashed #e2eaf6;border-radius:9px;padding:11px;text-align:center">
+            <div style="font-size:10px;color:#4a5982;margin-bottom:3px">توقيع الموظف</div>
+            <div style="height:24px;border-bottom:1px solid #e2eaf6;margin-top:10px"></div>
           </div>
-          <div style="border:1.5px dashed #e2eaf6;border-radius:10px;padding:12px;text-align:center">
-            <div style="font-size:10.5px;color:#4a5982;margin-bottom:4px">اعتماد المدير</div>
-            <div style="height:28px;border-bottom:1px solid #e2eaf6;margin-top:12px"></div>
+          <div style="border:1.5px dashed #e2eaf6;border-radius:9px;padding:11px;text-align:center">
+            <div style="font-size:10px;color:#4a5982;margin-bottom:3px">اعتماد المدير</div>
+            <div style="height:24px;border-bottom:1px solid #e2eaf6;margin-top:10px"></div>
           </div>
         </div>
 
-        <!-- Footer الإيصال -->
-        <div style="margin-top:12px;text-align:center;font-size:10px;color:#94a3b8">
+        <div style="margin-top:10px;text-align:center;font-size:9.5px;color:#94a3b8">
           تم إنشاؤه بواسطة زمزم Payroll v1.0 — URCOD — Mahmoud Gamal El-Din
         </div>
       </div>
-    </div>`;}).join('');reportData = emps;}
-
-function printReceipts(){
+    </div>`;
+}function printReceipts(){
   const filterEid = document.getElementById('print-emp-sel')?.value || 'all';renderReceipts();// إضافة CSS للطباعة
   const style = document.createElement('style');style.id = 'print-style-temp';style.textContent = `
     @media print {
