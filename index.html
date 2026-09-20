@@ -4616,8 +4616,17 @@ function saveLeave(autoPrint=false){
     createdAt:new Date().toISOString()
   };DB.leaves.push(rec);localStorage.setItem('zz_leaves',JSON.stringify(DB.leaves));// إضافة للحضور تلقائياً
   for(let d=0;d<days;d++){
-    const dt=new Date(from);dt.setDate(dt.getDate()+d);const dtStr=localDateStr(dt);if(!DB.att.find(a=>a.eid===eid&&a.dt===dtStr)){
-      DB.att.push({id:uid(),eid,dt:dtStr,y:dt.getFullYear(),m:dt.getMonth()+1,d:dt.getDate(),ti:'',to:'',ot:0,ott:'',st:'إجازة اعتيادية',nt:'إجازة اعتيادية',isLate:false});}
+    const dt=new Date(from);dt.setDate(dt.getDate()+d);const dtStr=localDateStr(dt);
+    const existIdx=DB.att.findIndex(a=>a.eid===eid&&a.dt===dtStr);
+    if(existIdx<0){
+      // مفيش سجل خالص لليوم ده — ننشئ واحد جديد بحالة إجازة اعتيادية
+      DB.att.push({id:uid(),eid,dt:dtStr,y:dt.getFullYear(),m:dt.getMonth()+1,d:dt.getDate(),ti:'',to:'',ot:0,ott:'',st:'إجازة اعتيادية',nt:'إجازة اعتيادية',isLate:false});
+    } else if(DB.att[existIdx].st!=='إجازة اعتيادية'){
+      // فيه سجل موجود بحالة تانية (حضور، غياب، إلخ) — لازم نحوّله لإجازة اعتيادية
+      // برضه، عشان سجل الإجازة وسجل الحضور يفضلوا متطابقين دايمًا ومايحصلش
+      // تعارض زي إن الإجازة تتسجل من غير ما ينعكس ده على تاب الحضور
+      DB.att[existIdx] = {...DB.att[existIdx], ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'إجازة اعتيادية'};
+    }
   }
   sv('att',DB.att);document.getElementById('lv-mo')?.remove();toast(`تم تسجيل ${days} يوم إجازة لـ ${emp?.nm}`,'success');renderLeave();
   if(autoPrint) setTimeout(()=>printLeaveForm(rec.id),400);
@@ -4681,10 +4690,19 @@ function cancelLeaveDay(eid, dt, year){
   if(!confirm('إلغاء إجازة يوم '+dt+'؟ سيرجع اليوم رصيدًا ويُعاد تصنيفه كحضور.')) return;
 
   const attRec = DB.att.find(a=>a.eid===eid && a.dt===dt && a.st==='إجازة اعتيادية');
-  if(!attRec){ toast('لم يتم العثور على سجل هذا اليوم','error'); return; }
-
-  // نفس منطق التحويل الموحّد — بيرجّع الرصيد صح حتى لو اليوم ده جزء من طلب متعدد الأيام
-  convertAttStatus(attRec.id, 'حضور');
+  if(attRec){
+    // المسار الطبيعي — نفس منطق التحويل الموحّد، بيرجّع الرصيد صح
+    // حتى لو اليوم ده جزء من طلب متعدد الأيام
+    convertAttStatus(attRec.id, 'حضور');
+  } else {
+    // شبكة أمان: لو حصل تعارض بيانات قديم (سجل إجازة من غير سجل حضور مطابق)
+    // نلغي سجل الإجازة نفسه مباشرة عشان الرصيد يترجع، بدل ما المحاسب يفضل عالق
+    const leaveRec = DB.leaves.find(l=>l.eid===eid&&l.from<=dt&&l.to>=dt&&l.status!=='ملغاة');
+    if(!leaveRec){ toast('لم يتم العثور على سجل هذا اليوم','error'); return; }
+    const result = removeDayFromLeaveRecord(leaveRec, dt);
+    if(result.newRec) DB.leaves.push(result.newRec);
+    sv('leaves', DB.leaves);
+  }
 
   toast('✅ تم إلغاء الإجازة — رجع اليوم للرصيد','success');
   document.getElementById('leave-hist-mo')?.remove();
