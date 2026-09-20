@@ -1809,6 +1809,26 @@ async function reconnectFirebase(){
   return await initFirebase();
 }
 
+// ===== فحص دوري لصحة اتصال فايربيز — أي فشل مؤقت (حتى لو النت شغال طول
+// الوقت) كان بيقفل الاتصال للأبد؛ دلوقتي بيحاول يرجع يتصل تلقائيًا كل 30 ثانية =====
+let _fbHealthCheckBusy = false;
+async function firebaseHealthCheck(){
+  if(_fbHealthCheckBusy) return;
+  _fbHealthCheckBusy = true;
+  try{
+    if(!fbOnline){
+      await reconnectFirebase();
+      if(fbOnline){
+        try{ toast('✅ رجع الاتصال بفايربيز — جاري رفع أي بيانات معلّقة','success'); }catch(e){}
+        try{ await fbUploadAll(); }catch(e){}
+        try{ fbStartRealtimeSync(); }catch(e){}
+        try{ listenFpStatusInfo(); }catch(e){}
+      }
+    }
+  } catch(e){ /* تجاهل تمامًا — فحص دوري بصمت */ }
+  _fbHealthCheckBusy = false;
+}
+
 // ===== مؤشر Firebase في الـ topbar =====
 function updateFbIndicator(online){
   const dot = document.getElementById('fb-dot');
@@ -2280,13 +2300,13 @@ function removeDayFromLeaveRecord(leaveRec, dt){
   }
   if(dt === leaveRec.from){
     const next = new Date(leaveRec.from+'T00:00:00'); next.setDate(next.getDate()+1);
-    leaveRec.from = next.toISOString().slice(0,10);
+    leaveRec.from = localDateStr(next);
     leaveRec.days = Number(leaveRec.days) - 1;
     return { removed: 'start' };
   }
   if(dt === leaveRec.to){
     const prev = new Date(leaveRec.to+'T00:00:00'); prev.setDate(prev.getDate()-1);
-    leaveRec.to = prev.toISOString().slice(0,10);
+    leaveRec.to = localDateStr(prev);
     leaveRec.days = Number(leaveRec.days) - 1;
     return { removed: 'end' };
   }
@@ -2295,9 +2315,9 @@ function removeDayFromLeaveRecord(leaveRec, dt){
   const beforeDays = Math.round((beforeEnd - new Date(leaveRec.from+'T00:00:00'))/86400000)+1;
   const afterDays = Math.round((new Date(leaveRec.to+'T00:00:00') - afterStart)/86400000)+1;
   const originalTo = leaveRec.to;
-  leaveRec.to = beforeEnd.toISOString().slice(0,10);
+  leaveRec.to = localDateStr(beforeEnd);
   leaveRec.days = beforeDays;
-  const newRec = {...leaveRec, id: uid(), from: afterStart.toISOString().slice(0,10), to: originalTo, days: afterDays, createdAt:new Date().toISOString()};
+  const newRec = {...leaveRec, id: uid(), from: localDateStr(afterStart), to: originalTo, days: afterDays, createdAt:new Date().toISOString()};
   return { removed: 'middle', newRec };
 }
 
@@ -2913,7 +2933,7 @@ function renderAtt(){
     const last = new Date(rangeTo+'T00:00:00');
     let guard=0;
     while(cur <= last && guard<370){
-      const dt = cur.toISOString().slice(0,10);
+      const dt = localDateStr(cur);
       displayList.push(byDate[dt] || {eid:ef, dt, ti:'', to:'', ot:0, st:null, __placeholder:true});
       cur.setDate(cur.getDate()+1);
       guard++;
@@ -4214,7 +4234,7 @@ function cancelLeave(id){
   const e = DB.emp.find(x=>x.id===l.eid);
   for(let d=0;d<l.days;d++){
     const dt = new Date(l.from);dt.setDate(dt.getDate()+d);
-    const dtStr = dt.toISOString().slice(0,10);
+    const dtStr = localDateStr(dt);
     DB.att = DB.att.filter(a=>!(a.eid===l.eid&&a.dt===dtStr&&a.st==='إجازة اعتيادية'));
   }
   localStorage.setItem('zz_leaves',JSON.stringify(DB.leaves));
@@ -4232,7 +4252,7 @@ function deleteLeaveConfirm(id){
   // إزالة من الحضور
   for(let d=0;d<l.days;d++){
     const dt=new Date(l.from);dt.setDate(dt.getDate()+d);
-    DB.att=DB.att.filter(a=>!(a.eid===l.eid&&a.dt===dt.toISOString().slice(0,10)&&a.st==='إجازة اعتيادية'));
+    DB.att=DB.att.filter(a=>!(a.eid===l.eid&&a.dt===localDateStr(dt)&&a.st==='إجازة اعتيادية'));
   }
   DB.leaves = DB.leaves.filter(x=>x.id!==id);
   localStorage.setItem('zz_leaves',JSON.stringify(DB.leaves));
@@ -4577,7 +4597,7 @@ function saveLeave(autoPrint=false){
     createdAt:new Date().toISOString()
   };DB.leaves.push(rec);localStorage.setItem('zz_leaves',JSON.stringify(DB.leaves));// إضافة للحضور تلقائياً
   for(let d=0;d<days;d++){
-    const dt=new Date(from);dt.setDate(dt.getDate()+d);const dtStr=dt.toISOString().slice(0,10);if(!DB.att.find(a=>a.eid===eid&&a.dt===dtStr)){
+    const dt=new Date(from);dt.setDate(dt.getDate()+d);const dtStr=localDateStr(dt);if(!DB.att.find(a=>a.eid===eid&&a.dt===dtStr)){
       DB.att.push({id:uid(),eid,dt:dtStr,y:dt.getFullYear(),m:dt.getMonth()+1,d:dt.getDate(),ti:'',to:'',ot:0,ott:'',st:'إجازة اعتيادية',nt:'إجازة اعتيادية',isLate:false});}
   }
   sv('att',DB.att);document.getElementById('lv-mo')?.remove();toast(`تم تسجيل ${days} يوم إجازة لـ ${emp?.nm}`,'success');renderLeave();
@@ -4595,10 +4615,13 @@ function viewLeaveHistory(eid, year){
   // بنفس منطق الإلغاء الآمن اللي بيحترم باقي أيام السجل (تقسيم بدل إلغاء الكل)
   const days = [];
   recs.forEach(rec=>{
+    // نبني التاريخ يدويًا من الأرقام مباشرة — بدون toISOString() اللي بيحوّل
+    // لتوقيت UTC ويرجّع يوم غلط (فرق يوم كامل حسب توقيت الجهاز، زي مصر)
     let cur = new Date(rec.from+'T00:00:00');
     const last = new Date(rec.to+'T00:00:00');
     while(cur<=last){
-      days.push({dt: cur.toISOString().slice(0,10), note: rec.note||''});
+      const dt = cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0')+'-'+String(cur.getDate()).padStart(2,'0');
+      days.push({dt, note: rec.note||''});
       cur.setDate(cur.getDate()+1);
     }
   });
@@ -4994,6 +5017,12 @@ window.addEventListener('appinstalled', () => {
 // =====================================================
 
 // ===== تاريخ اليوم الفعلي بتوقيت مصر =====
+// تنسيق تاريخ من كائن Date بالتوقيت المحلي مباشرة — بدون toISOString()
+// اللي بيحوّل لتوقيت UTC وبيرجّع يوم غلط حسب فرق التوقيت المحلي (زي مصر)
+function localDateStr(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
 function getCairoTodayStr(){
   try{
     return new Date().toLocaleDateString('en-CA', {timeZone:'Africa/Cairo'});
@@ -5757,6 +5786,11 @@ function startServerMonitor(){
   // فحص كل 60 ثانية بصمت
   if(window.serverCheckInterval) clearInterval(window.serverCheckInterval);
   window.serverCheckInterval = setInterval(checkServerStatus, 60000);
+
+  // فحص دوري لصحة اتصال فايربيز نفسه — كل 30 ثانية، بيحاول يرجع يتصل
+  // تلقائيًا لو انقطع لأي سبب (حتى لو النت شغال طول الوقت)
+  if(window.fbHealthInterval) clearInterval(window.fbHealthInterval);
+  window.fbHealthInterval = setInterval(firebaseHealthCheck, 30000);
 }
 
 // ===== المنطق الأساسي لجلب ودمج بيانات البصمة (يُستخدم في المزامنة اليومية واللحظية معًا) =====
@@ -7245,7 +7279,7 @@ function renderDailyAttReport(){
     const last = new Date(toD+'T00:00:00');
     let guard = 0;
     while(cur <= last && guard < 370){
-      dateList.push(cur.toISOString().slice(0,10));
+      dateList.push(localDateStr(cur));
       cur.setDate(cur.getDate()+1);
       guard++;
     }
