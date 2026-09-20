@@ -1788,7 +1788,13 @@ async function initFirebase(){
 // البرنامج أصلاً بيحفظ محليًا أولًا في كل حفظة (زي ما هو الحال دايمًا)،
 // فطول ما النت مقطوع هيفضل يشتغل عادي، وبمجرد ما يرجع بنرفع اللي اتحفظ تلقائيًا
 window.addEventListener('offline', ()=>{
-  try{ toast('🔌 انقطع الاتصال بالإنترنت — هيفضل البرنامج يحفظ عندك محليًا لحد ما يرجع الاتصال', 'error'); }catch(e){}
+  try{
+    // انقطاع إنترنت حقيقي (مش مجرد فشل رفعة واحدة) — هنا فعلاً نوقف محاولات
+    // فايربيز لحد ما النت يرجع، عشان منضيّعش وقت في محاولات هتفشل أكيد
+    fbOnline = false;
+    updateFbIndicator(false);
+    toast('🔌 انقطع الاتصال بالإنترنت — هيفضل البرنامج يحفظ عندك محليًا لحد ما يرجع الاتصال', 'error');
+  }catch(e){}
 });
 
 window.addEventListener('online', async ()=>{
@@ -1805,6 +1811,16 @@ window.addEventListener('online', async ()=>{
 
 // ===== إعادة محاولة الاتصال بفايربيز (كانت مقفولة نهائيًا بعد أول فشل قبل كده) =====
 async function reconnectFirebase(){
+  // فايربيز اتأسس بالفعل من أول مرة (fbApp/fbDB موجودين ومحفوظين في الذاكرة) —
+  // مينفعش نعيد التأسيس (initializeApp) تاني، لأن فايربيز بيرفض ده ويرمي خطأ
+  // "already exists" فورًا، وده كان بيقفل الاتصال تاني في نفس اللحظة —
+  // ده بالظبط سبب دورة "يتصل ثانية ويفصل تاني كل 15-30 ثانية"
+  if(fbApp && window._fb){
+    fbOnline = true;
+    updateFbIndicator(true);
+    return true;
+  }
+  // بس لو التأسيس الأول نفسه فشل من البداية (fbApp لسه null)، نجرب التأسيس الكامل مرة واحدة
   fbInitialized = false;
   return await initFirebase();
 }
@@ -1857,9 +1873,12 @@ async function fbPush(key, data){
     await set(ref(db, 'zz/'+key), data);
     return true;
   } catch(e){
+    // فشل رفع واحد (حتى لو عابر) ما ينفعش يقفل الاتصال بالكامل —
+    // كان ده السبب الحقيقي: أي محاولة رفع وحيدة تفشل، ولو لحظيًا،
+    // كانت بتعلن إن البرنامج كله "مش متصل" بفايربيز، رغم إن الاتصال
+    // نفسه سليم والغلطة كانت في عملية واحدة بس. الرفعة دي بس اللي بتفشل،
+    // والحفظ المحلي أصلاً حصل قبلها، فمفيش بيانات ضاعت
     console.warn('fbPush error:', key, e.message);
-    fbOnline = false;
-    updateFbIndicator(false);
     return false;
   }
 }
