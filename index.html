@@ -910,6 +910,7 @@ body.auth-mode {
     <div>
       <h1 style="font-size:20px;font-weight:800;color:#0f2057;margin:0 0 4px">متابعة الإجراءات</h1>
       <div style="font-size:12px;color:#94a3b8">سجل مركزي لكل ما اكتشفه واقترحه النظام، وما قرره المحاسب — سجل تدقيق كامل</div>
+      <div id="track-sync-notice" style="font-size:11.5px;color:#d97706;margin-top:6px;display:none"></div>
     </div>
     <button class="btn bg" onclick="resetActionTrackingFilters()"><span class="ms ms-sm">refresh</span>إعادة تعيين</button>
   </div>
@@ -2157,6 +2158,8 @@ async function initFirebaseOnLogin(){
     await fbAutoSyncOnLogin();
     // مراقبة التحديثات اللحظية
     fbStartRealtimeSync();
+    // مراقبة حالة اتصال البصمة بين الأجهزة (تغيير فقط، بدون استهلاك زائد)
+    listenFpStatusRealtime();
   }
 }
 
@@ -2341,6 +2344,26 @@ function convertAttStatus(attId, newStatus, opts={}){
 
   logActivity('تحويل حالة حضور',
     `${emp.nm} | ${rec.dt} | ${oldStatus} → ${newStatus}`);
+
+  // === مصدر واحد للحقيقة: أي تعديل مباشر على الحضور (من تاب الحضور أو
+  // كشف المرتبات) لازم ينعكس على سجل "متابعة الإجراءات" لنفس اليوم لو موجود،
+  // بدل ما يفضل شايل الاقتراح القديم وكأنه لسه الحالة الحالية ===
+  const statusToAction = {
+    'يوم بدل راحة':'rest_swap', 'غياب بإذن':'permitted',
+    'غياب بدون إذن':'unauthorized', 'إجازة اعتيادية':'leave',
+    'راحة أسبوعية':'rest', 'حضور':'present'
+  };
+  const relatedIssue = DB.issues.find(i=>i.eid===rec.eid && i.dt===rec.dt);
+  if(relatedIssue){
+    const newAction = statusToAction[newStatus] || newStatus;
+    relatedIssue.history = relatedIssue.history || [];
+    relatedIssue.history.push({from:relatedIssue.finalAction, to:newAction, by:getSession()?.name||'نظام', at:new Date().toISOString()});
+    relatedIssue.finalAction = newAction;
+    relatedIssue.status = relatedIssue.status==='بانتظار المراجعة' ? 'تم التعديل' : 'تم التعديل';
+    relatedIssue.decidedBy = getSession()?.name||'نظام';
+    relatedIssue.decidedAt = new Date().toISOString();
+    sv('issues', DB.issues);
+  }
 
   return { oldStatus, newStatus };
 }
@@ -4896,14 +4919,24 @@ function getCairoTodayStr(){
 // الراحة أو بدل الراحة، ثم تُستخدم نفس حالات att.st الموجودة أصلاً
 function computeRestCycle(days, restDayNum){
   let counter = 0;
+  let owesCompRest = false; // مديون بيوم بدل راحة (اشتغل في يوم راحته المستحق)
   const results = [];
   for(const day of days){
     const { dt, dow, hasAttendance, hasCheckout, isLeave, existingStatus } = day;
 
     if(existingStatus){
       if(existingStatus==='حضور' || existingStatus==='إجازة اعتيادية') counter++;
-      else if(existingStatus==='راحة أسبوعية' || existingStatus==='يوم بدل راحة') counter=0;
+      else if(existingStatus==='راحة أسبوعية' || existingStatus==='يوم بدل راحة'){ counter=0; owesCompRest=false; }
       results.push({dt, decision:'existing', status:existingStatus});
+      continue;
+    }
+
+    // لو الموظف مديون بيوم بدل راحة، وده أول يوم بدون بصمة بعد ما اشتغل في راحته —
+    // اليوم ده بيبقى بدل الراحة نفسه (مش اليوم اللي اشتغل فيه أصلاً)
+    if(owesCompRest && !hasAttendance){
+      results.push({dt, decision:'rest_swap_taken', status:'يوم بدل راحة'});
+      owesCompRest = false;
+      counter = 0;
       continue;
     }
 
@@ -4912,11 +4945,15 @@ function computeRestCycle(days, restDayNum){
 
     if(dueForRest){
       if(hasAttendance){
-        results.push({dt, decision:'rest_worked', status:'يوم بدل راحة', needsCheckoutNotice: !hasCheckout});
+        // اشتغل في يوم راحته المستحق — يُحتسب حضور عادي، ويصبح مديونًا بيوم بدل راحة
+        // يُصرف في أول يوم بدون بصمة بعده (مش اليوم ده نفسه)
+        counter++;
+        owesCompRest = true;
+        results.push({dt, decision:'work', status:'حضور', needsCheckoutNotice: !hasCheckout, workedOnDueRestDay:true});
       } else {
         results.push({dt, decision:'rest_due', status:'راحة أسبوعية'});
+        counter = 0;
       }
-      counter = 0;
       continue;
     }
 
@@ -4976,6 +5013,10 @@ function scanAttendanceIssues(){
   migrateLegacyIssueRecords();
   const y = DB.cycle.y, m = DB.cycle.m;
   const todayStr = getCairoTodayStr();
+  // نطاق التحليل يتوقف عند آخر تاريخ وصلت له بيانات بصمة فعليًا (لو موجود)،
+  // مش عند تاريخ اليوم — عشان منقترحش غياب لأيام لسه البيانات متوصلتش لها
+  const lastSync = DB.rules['lastAttSyncDate'];
+  const cutoffStr = (lastSync && lastSync < todayStr) ? lastSync : todayStr;
   const daysInMonth = new Date(y, m, 0).getDate();
   const activeEmps = DB.emp.filter(e=>e.st==='نشط');
 
@@ -4989,7 +5030,7 @@ function scanAttendanceIssues(){
     const days = [];
     for(let d=1; d<=daysInMonth; d++){
       const dt = y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
-      if(dt > todayStr) break;
+      if(dt > cutoffStr) break;
       const dow = new Date(y, m-1, d).getDay();
       const att = DB.att.find(a=>a.eid===e.id && a.dt===dt);
       const leaveRec = DB.leaves.find(l=>l.eid===e.id && l.status!=='ملغاة' && l.from<=dt && l.to>=dt);
@@ -5043,39 +5084,42 @@ function scanAttendanceIssues(){
         return;
       }
 
-      if(r.decision==='rest_worked'){
-        const existAtt = DB.att.find(a=>a.eid===e.id&&a.dt===dt);
-        if(existAtt && existAtt.st!=='يوم بدل راحة'){
-          existAtt.st='يوم بدل راحة'; existAtt.nt=(existAtt.nt||'')+' — بدل راحة تلقائي';
-          attChanged = true;
-        }
+      if(r.decision==='work' && r.workedOnDueRestDay){
+        // اشتغل في يوم راحته المستحق — السجل يفضل "حضور" عادي، والموظف بقى
+        // مديون بيوم بدل راحة هيتسجل تلقائيًا في أول يوم بدون بصمة بعده
         const trackId = 'trk_'+e.id+'_'+dt;
-        let trk = DB.issues.find(i=>i.id===trackId);
-        if(!trk){
-          trk = {
+        if(!DB.issues.find(i=>i.id===trackId)){
+          DB.issues.push({
             id: trackId, eid:e.id, dt, type:'بدل راحة',
-            systemFinding:'الموظف أكمل 6 أيام عمل محتسبة، وسجل حضورًا في يوم الراحة المحدد له',
-            suggestedAction:'rest_swap', executedAction:'rest_swap', finalAction:'rest_swap',
+            systemFinding:'الموظف أكمل 6 أيام عمل محتسبة وحضر في يوم راحته المحدد — أصبح مستحقًا ليوم بدل راحة، سيُسجَّل تلقائيًا في أول يوم بدون بصمة',
+            suggestedAction:'rest_swap', executedAction:null, finalAction:null,
+            status:'تمت الموافقة', history:[],
+            createdAt:new Date().toISOString(), createdBy:'نظام',
+            decidedBy:'نظام', decidedAt:new Date().toISOString()
+          });
+          issuesChanged = true;
+        }
+      }
+
+      if(r.decision==='rest_swap_taken'){
+        DB.att.push({
+          id: uid(), eid: e.id, dt, y, m, d:Number(dt.slice(8,10)),
+          ti:'', to:'', ot:0, ott:'', st:'يوم بدل راحة', nt:'',
+          isLate:false, source:'تلقائي', autoRest:true,
+          createdAt: new Date().toISOString()
+        });
+        attChanged = true;
+        const trackId = 'trk_'+e.id+'_'+dt;
+        if(!DB.issues.find(i=>i.id===trackId)){
+          DB.issues.push({
+            id: trackId, eid:e.id, dt, type:'بدل راحة',
+            systemFinding:'تم تسجيل هذا اليوم بدل راحة تلقائيًا — استحقه الموظف من عمله في يوم راحته المحدد له',
+            suggestedAction:'rest_swap', executedAction:'rest_swap', finalAction:null,
             status:'بانتظار المراجعة', history:[],
             createdAt:new Date().toISOString(), createdBy:'نظام',
             decidedBy:null, decidedAt:null
-          };
-          DB.issues.push(trk);
+          });
           issuesChanged = true;
-        }
-        if(r.needsCheckoutNotice){
-          const coId = 'co_'+e.id+'_'+dt;
-          if(!DB.issues.find(i=>i.id===coId)){
-            DB.issues.push({
-              id:coId, eid:e.id, dt, type:'نقص انصراف',
-              systemFinding:'الموظف سجل حضورًا في يوم بدل الراحة ولم يسجل انصرافًا',
-              suggestedAction:'review_checkout', executedAction:null, finalAction:null,
-              status:'بانتظار المراجعة', history:[],
-              createdAt:new Date().toISOString(), createdBy:'نظام',
-              decidedBy:null, decidedAt:null
-            });
-            issuesChanged = true;
-          }
         }
         return;
       }
@@ -5348,9 +5392,9 @@ function editPastDecision(issueId, actionType){
 
   const statusMap = {
     rest_swap:'يوم بدل راحة', permitted:'غياب بإذن',
-    unauthorized:'غياب بدون إذن', rest:'راحة أسبوعية'
+    unauthorized:'غياب بدون إذن', rest:'راحة أسبوعية', present:'حضور'
   };
-  const actionLabels = {rest_swap:'بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية', rest:'راحة أسبوعية'};
+  const actionLabels = {rest_swap:'بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية', rest:'راحة أسبوعية', present:'حضور'};
 
   // نلاقي السجل الفعلي المرتبط بنفس اليوم (سواء اتسجل تلقائي أو من قرار سابق)
   const attRec = DB.att.find(a=>a.eid===iss.eid && a.dt===iss.dt);
@@ -5421,10 +5465,11 @@ function resolveAttIssue(issueId, actionType){
   const statusMap = {
     rest_swap: 'يوم بدل راحة',
     permitted: 'غياب بإذن',
-    unauthorized: 'غياب بدون إذن'
+    unauthorized: 'غياب بدون إذن',
+    present: 'حضور'
   };
 
-  const actionLabels = {rest_swap:'بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية'};
+  const actionLabels = {rest_swap:'بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية', present:'حضور'};
 
   if(actionType==='leave'){
     // إجازة اعتيادية — بنفس منطق خصم الرصيد المستخدم في باقي النظام
@@ -5557,16 +5602,71 @@ function updateServerIndicator(online){
   }
 }
 
+// =====================================================
+// تزامن حالة اتصال البصمة بين كل الأجهزة — Firebase
+// المبدأ: أي جهاز بيتأكد بنفسه من اتصاله المحلي بالبصمة
+// (زي ما هو تمامًا)، لكن يرفع لفايربيز *فقط* لما حالته
+// تتغيّر فعليًا، ومفيش أي جهاز بيكتب "غير متصل" فوق حالة
+// صحيحة لجهاز تاني — الكتابة مقصورة على الجهاز اللي فعلاً
+// نجح يتصل بالبصمة مرة على الأقل في الجلسة دي
+// =====================================================
+let fpLocalStatus = null;            // آخر حالة معروفة من الفحص المباشر لهذا الجهاز
+let fpNetworkStatus = null;          // آخر حالة معروفة من فايربيز (مشتركة)
+let fpHasEverConnectedLocally = false; // هل نجح هذا الجهاز يتصل بالبصمة فعليًا مرة على الأقل
+
+// ===== استدعاء بعد كل فحص محلي (checkServerStatus) =====
+function handleLocalFpStatus(online){
+  if(online) fpHasEverConnectedLocally = true;
+  const changed = fpLocalStatus !== online;
+  fpLocalStatus = online;
+
+  // تحديث الواجهة فورًا — متصل لو الجهاز ده نفسه متصل، أو لو جهاز تاني مُبلّغ إنه متصل
+  updateServerIndicator(online || fpNetworkStatus===true);
+
+  // الكتابة لفايربيز مقصورة على الجهاز اللي فعلاً له وصول حقيقي للبصمة —
+  // عشان جهاز بعيد (زي محاسب شغال من مكان تاني) ميكتبش "غير متصل" فوق حالة صحيحة
+  if(fpHasEverConnectedLocally && changed){
+    pushFpStatusToFirebase(online);
+  }
+}
+
+async function pushFpStatusToFirebase(online){
+  if(!fbOnline || !window._fb) return;
+  try{
+    const { ref, set, db } = window._fb;
+    await set(ref(db, 'zz/fpStatus'), {
+      online, ts: new Date().toISOString(),
+      device: (navigator.userAgent||'').slice(0,60)
+    });
+  } catch(e){}
+}
+
+// ===== مراقبة لحظية — بس تستمع، لا تكتب إلا في الحالة أعلاه =====
+function listenFpStatusRealtime(){
+  if(!fbOnline || !window._fb) return;
+  const { ref, onValue, db } = window._fb;
+  onValue(ref(db, 'zz/fpStatus'), (snap)=>{
+    if(!snap.exists()) return;
+    const val = snap.val();
+    fpNetworkStatus = val.online;
+    // لو الجهاز ده نفسه غير متصل محليًا، نعكس حالة الشبكة على الواجهة
+    if(!fpLocalStatus){
+      updateServerIndicator(fpNetworkStatus===true);
+    }
+  });
+}
+
 async function checkServerStatus(){
   try{
     const res = await fetch('http://localhost:7788/ping',{
       signal: AbortSignal.timeout(2000)
     });
     const data = await res.json();
-    updateServerIndicator(data.status==='ok');
-    return data.status==='ok';
+    const online = data.status==='ok';
+    handleLocalFpStatus(online);
+    return online;
   } catch(e){
-    updateServerIndicator(false);
+    handleLocalFpStatus(false);
     return false;
   }
 }
@@ -5595,6 +5695,14 @@ async function performFingerprintSync(){
     );
     const syncData = await syncRes.json();
     if(syncData.status !== 'success' || !syncData.records?.length) return result;
+
+    // نسجّل آخر تاريخ فعليًا وصلت له بيانات من البصمة (مش تاريخ تشغيل البرنامج) —
+    // ده اللي هيحدد نطاق تحليل "متابعة الإجراءات" بدل ما يعتمد على تاريخ اليوم
+    const latestDataDate = syncData.records.reduce((mx,r)=> r.date>mx?r.date:mx, '');
+    if(latestDataDate && latestDataDate !== DB.rules['lastAttSyncDate']){
+      DB.rules['lastAttSyncDate'] = latestDataDate;
+      sv('rules', DB.rules);
+    }
 
     // ===== 1) استيراد أي موظف جديد موجود على جهاز البصمة وغير موجود في النظام =====
     const empMap={};
@@ -6222,7 +6330,7 @@ function resetActionTrackingFilters(){
 function trackingActionLabel(a){
   const labels = {
     rest:'راحة', rest_swap:'بدل راحة', permitted:'غياب بإذن',
-    unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية',
+    unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية', present:'حضور',
     review_checkout:'مراجعة الانصراف', auto_matched:'مطابق تلقائيًا', null:'—'
   };
   return labels[a] || a || '—';
@@ -6233,6 +6341,19 @@ function renderActionTracking(){
   const cardsWrap = document.getElementById('track-cards');
   const kpiEl = document.getElementById('track-kpis');
   if(!wrap || !kpiEl) return;
+
+  // تنبيه حد نطاق التحليل — متابعة الإجراءات تعمل لحد آخر تاريخ وصلت له بيانات بصمة فعليًا
+  const syncNoticeEl = document.getElementById('track-sync-notice');
+  if(syncNoticeEl){
+    const todayN = getCairoTodayStr();
+    const lastSyncN = DB.rules['lastAttSyncDate'];
+    if(lastSyncN && lastSyncN < todayN){
+      syncNoticeEl.style.display='block';
+      syncNoticeEl.innerHTML = '⏳ تمت متابعة الإجراءات حتى تاريخ <strong>'+lastSyncN+'</strong> وفقًا لآخر بيانات حضور تم سحبها من جهاز البصمة — لا توجد اقتراحات للأيام بعد هذا التاريخ حتى تصل بياناتها.';
+    } else {
+      syncNoticeEl.style.display='none';
+    }
+  }
 
   // ===== فرض الصلاحية على مستوى البيانات نفسها (مش بس إخفاء الرابط) =====
   if(!canViewActionTracking()){
@@ -6384,6 +6505,7 @@ function viewTrackingDetail(id){
         + "<button onclick=\"resolveAttIssue('"+iss.id+"','permitted');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
         + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
         + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','present');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>حضور</button>"
         + "<button onclick=\"dismissAttIssue('"+iss.id+"');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0f4fc;color:#94a3b8'>تم بدون إجراء</button>"
         + "</div>";
     } else {
@@ -6402,6 +6524,7 @@ function viewTrackingDetail(id){
       +   "<button onclick=\"editPastDecision('"+iss.id+"','permitted');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
       +   "<button onclick=\"editPastDecision('"+iss.id+"','unauthorized');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
       +   "<button onclick=\"editPastDecision('"+iss.id+"','leave');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+      +   "<button onclick=\"editPastDecision('"+iss.id+"','present');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>حضور</button>"
       +   "<button onclick=\"editPastDecision('"+iss.id+"','rest');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>راحة أسبوعية</button>"
       + "</div>"
       + "</div>";
