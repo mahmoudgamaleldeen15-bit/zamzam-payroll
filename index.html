@@ -4189,7 +4189,7 @@ function saveAndPrintLeave(){
 function showLeaveHistory(eid, year){
   const e = DB.emp.find(x=>x.id===eid);
   if(!e) return;
-  const recs = DB.leaves.filter(l=>l.eid===eid&&l.year===Number(year)).sort((a,b)=>a.from.localeCompare(b.from));
+  const recs = DB.leaves.filter(l=>l.eid===eid&&l.year===Number(year)&&l.status!=='ملغاة').sort((a,b)=>a.from.localeCompare(b.from));
   const MONTHS_SH=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 
   const existing = document.getElementById('leave-history-mo');
@@ -4522,14 +4522,14 @@ function repairLeaveRecords(){
 
 function renderLeave(){
   initLeaveYear();const year = Number(document.getElementById('lv-year')?.value||new Date().getFullYear());const q = (document.getElementById('lv-q')?.value||'').toLowerCase();const emps = DB.emp.filter(e=>e.st==='نشط'&&(!q||(e.nm||'').toLowerCase().includes(q)));// KPIs
-  const totBal = emps.reduce((s,e)=>s+Number(e.leaveBal||30),0);const usedYear = DB.leaves.filter(l=>l.year===year).reduce((s,l)=>s+Number(l.days||0),0);const usedMonth = DB.leaves.filter(l=>l.year===year&&l.month===DB.cycle.m).reduce((s,l)=>s+Number(l.days||0),0);const remaining = totBal - usedYear;document.getElementById('lv-kpis').innerHTML = `
+  const totBal = emps.reduce((s,e)=>s+Number(e.leaveBal||30),0);const usedYear = DB.leaves.filter(l=>l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const usedMonth = DB.leaves.filter(l=>l.year===year&&l.month===DB.cycle.m&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const remaining = totBal - usedYear;document.getElementById('lv-kpis').innerHTML = `
     ${kpiCard('beach_access','إجمالي الرصيد السنوي',totBal+' يوم','#0f2057','#eef2ff')}
     ${kpiCard('event_busy','مأخوذ هذا الشهر',usedMonth+' يوم','#d97706','#fef3c7')}
     ${kpiCard('event_busy','مأخوذ هذا العام',usedYear+' يوم','#e03131','#ffe5e5')}
     ${kpiCard('event_available','المتبقي الكلي',remaining+' يوم','#16a34a','#dcfce7')}`;const tbody = document.getElementById('lv-body');if(!emps.length){tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:36px;color:#94a3b8">لا موظفين</td></tr>';return;}
 
   tbody.innerHTML = emps.map(e=>{
-    const bal = Number(e.leaveBal||30);const usedY = DB.leaves.filter(l=>l.eid===e.id&&l.year===year).reduce((s,l)=>s+Number(l.days||0),0);const usedM = DB.leaves.filter(l=>l.eid===e.id&&l.year===year&&l.month===DB.cycle.m).reduce((s,l)=>s+Number(l.days||0),0);const rem = bal - usedY;const remColor = rem<=5?'#e03131':rem<=10?'#d97706':'#16a34a';return`<tr>
+    const bal = Number(e.leaveBal||30);const usedY = DB.leaves.filter(l=>l.eid===e.id&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const usedM = DB.leaves.filter(l=>l.eid===e.id&&l.year===year&&l.month===DB.cycle.m&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const rem = bal - usedY;const remColor = rem<=5?'#e03131':rem<=10?'#d97706':'#16a34a';return`<tr>
       <td style="font-weight:700">${e.nm}<br/><span style="font-size:10.5px;color:#94a3b8">${e.cd||''}</span></td>
       <td><span style="background:#eef2ff;color:#0f2057;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700">${e.dp||'—'}</span></td>
       <td style="text-align:center;font-weight:800;color:#0f2057">${bal}</td>
@@ -4605,7 +4605,7 @@ function saveLeave(autoPrint=false){
   const eid=document.getElementById('lvf-emp')?.value;const from=document.getElementById('lvf-from')?.value;const to=document.getElementById('lvf-to')?.value;if(!eid||!from||!to){toast('اختر الموظف وتواريخ الإجازة','error');return;}
   const days=Math.round((new Date(to)-new Date(from))/(1000*60*60*24))+1;if(days<=0){toast('التاريخ غير صحيح','error');return;}
   const emp=DB.emp.find(e=>e.id===eid);const year=Number(from.split('-')[0]);const month=Number(from.split('-')[1]);// التحقق من الرصيد
-  const used=DB.leaves.filter(l=>l.eid===eid&&l.year===year).reduce((s,l)=>s+Number(l.days||0),0);const bal=Number(emp?.leaveBal||30);if(used+days>bal){toast(`رصيد ${emp?.nm} غير كافٍ — المتبقي:${bal-used} يوم فقط`,'error');return;}
+  const used=DB.leaves.filter(l=>l.eid===eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const bal=Number(emp?.leaveBal||30);if(used+days>bal){toast(`رصيد ${emp?.nm} غير كافٍ — المتبقي:${bal-used} يوم فقط`,'error');return;}
   const substitute=document.getElementById('lvf-sub')?.value||'';
   const rec={
     id:uid(),eid,from,to,days,year,month,
