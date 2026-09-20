@@ -2066,6 +2066,11 @@ async function fbAutoDownloadChanges(fbTs){
 }
 
 function showSyncChangesNotification(changes, fbTs){
+  // حماية من تكرار الإشعار المزعج — أقصى مرة كل 30 ثانية
+  const now = Date.now();
+  if(window._lastSyncToastTs && (now - window._lastSyncToastTs) < 30000) return;
+  window._lastSyncToastTs = now;
+
   // إزالة الإشعار القديم
   document.getElementById('fb-changes-toast')?.remove();
   
@@ -2533,7 +2538,6 @@ function roundNetSalary(net){
 
 // ===================== DASHBOARD =====================
 function renderDash(){
-  if(typeof scanAttendanceIssues==='function') scanAttendanceIssues();
   const act=DB.emp.filter(e=>e.st==='نشط');let gr2=0,ded=0,net=0,oth=0;act.forEach(e=>{const p=calcSlip(e);gr2+=p.gross;ded+=p.deduct;net+=p.net;oth+=p.otHrs});const T=DB.emp.length;document.getElementById('k-emp').textContent=act.length;document.getElementById('k-emp-s').textContent=`من أصل ${T} مسجل`;bar('k-emp-b',T>0?act.length/T*100:0);document.getElementById('k-gr').textContent=fc(gr2)+' ج.م';bar('k-gr-b',75);document.getElementById('k-ded').textContent=fc(ded)+' ج.م';bar('k-ded-b',gr2>0?ded/gr2*100:0);document.getElementById('k-ot').textContent=fc(oth)+' ج.م';document.getElementById('k-ot-s').textContent=`${oth.toFixed(1)} ساعة إضافية`;bar('k-ot-b',60);document.getElementById('k-net').textContent=fc(net)+' ج.م';const rentAct=DB.rent.filter(r=>r.status==='نشط');const rentTot=rentAct.reduce((s,r)=>s+Number(r.curr||r.base||0),0);document.getElementById('k-rent').textContent=fc(rentTot)+' ج.م';document.getElementById('k-rent-s').textContent=`${rentAct.length} عقد نشط`;bar('k-rent-b',rentTot>0?70:0);// Dept bars
   const dm={};act.forEach(e=>{const p=calcSlip(e);dm[e.dp]=dm[e.dp]||{n:0,c:0};dm[e.dp].n+=p.net;dm[e.dp].c++});const dl=document.getElementById('dept-list');const depts=Object.entries(dm);if(!depts.length){dl.innerHTML='<div style="text-align:center;padding:22px;color:#94a3b8;font-size:12px"><span class="ms ms-xl" style="display:block;margin-bottom:6px">bar_chart</span>أضف موظفين</div>';return;}
   const mx=Math.max(...depts.map(d=>d[1].n));const cls=['#0f2057','#0ea5a0','#1e3a8a','#d97706','#7c3aed','#e03131'];dl.innerHTML=depts.map(([d,{n,c}],i)=>`
@@ -4945,6 +4949,10 @@ function migrateLegacyIssueRecords(){
 }
 
 function scanAttendanceIssues(){
+  // حماية من التكرار السريع (Throttle) — منع أي حلقة تشغيل متتالية بالغلط
+  const now = Date.now();
+  if(window._lastScanTs && (now - window._lastScanTs) < 20000) return;
+  window._lastScanTs = now;
   migrateLegacyIssueRecords();
   const y = DB.cycle.y, m = DB.cycle.m;
   const todayStr = getCairoTodayStr();
@@ -5301,6 +5309,73 @@ function showNotifications(){
 }
 
 // ===== تنفيذ إجراء على تنبيه (نوع no_attendance بس بيحتاج اختيار) =====
+// ===== إظهار خيارات تعديل قرار سابق =====
+function showEditPastDecision(issueId){
+  const el = document.getElementById('edit-past-actions-'+issueId);
+  if(el) el.style.display = el.style.display==='none' ? 'flex' : 'none';
+}
+
+// ===== تعديل قرار سابق تم اتخاذه بالفعل (تصحيح خطأ) =====
+function editPastDecision(issueId, actionType){
+  const session = getSession();
+  if(!session || !(session.role==='admin' || session.perms?.att_edit)){
+    toast('ليس لديك صلاحية','error'); return;
+  }
+  const iss = DB.issues.find(i=>i.id===issueId);
+  if(!iss){ toast('العنصر غير موجود','error'); return; }
+  const emp = DB.emp.find(e=>e.id===iss.eid);
+  if(!emp){ toast('الموظف غير موجود','error'); return; }
+
+  const statusMap = {
+    rest_swap:'يوم بدل راحة', permitted:'غياب بإذن',
+    unauthorized:'غياب بدون إذن', rest:'راحة أسبوعية'
+  };
+  const actionLabels = {rest_swap:'بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية', rest:'راحة أسبوعية'};
+
+  // نلاقي السجل الفعلي المرتبط بنفس اليوم (سواء اتسجل تلقائي أو من قرار سابق)
+  const attRec = DB.att.find(a=>a.eid===iss.eid && a.dt===iss.dt);
+
+  if(actionType==='leave'){
+    // لو كان فيه سجل قديم بحالة تانية، نستخدم نفس منطق التحويل الموحّد
+    if(attRec){
+      convertAttStatus(attRec.id, 'إجازة اعتيادية');
+    } else {
+      const year = new Date(iss.dt).getFullYear();
+      const used = DB.leaves.filter(l=>l.eid===iss.eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
+      const bal = Number(emp.leaveBal||30);
+      if(used >= bal){ toast('رصيد الإجازات غير كافٍ','error'); return; }
+      DB.att.push({id:uid(), eid:iss.eid, dt:iss.dt, y:year, m:new Date(iss.dt).getMonth()+1, d:new Date(iss.dt).getDate(), ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'تعديل قرار سابق', isLate:false, createdAt:new Date().toISOString()});
+      const lid = 'lv_att_'+DB.att[DB.att.length-1].id;
+      DB.leaves.push({id:lid, eid:iss.eid, from:iss.dt, to:iss.dt, days:1, year, month:new Date(iss.dt).getMonth()+1, status:'معتمدة', note:'تعديل قرار من متابعة الإجراءات', reqDate:new Date().toISOString().slice(0,10), createdAt:new Date().toISOString()});
+      sv('leaves', DB.leaves);
+      sv('att', DB.att);
+    }
+  } else {
+    const newStatus = statusMap[actionType];
+    if(!newStatus){ toast('إجراء غير معروف','error'); return; }
+    if(attRec){
+      convertAttStatus(attRec.id, newStatus);
+    } else {
+      DB.att.push({id:uid(), eid:iss.eid, dt:iss.dt, y:Number(iss.dt.slice(0,4)), m:Number(iss.dt.slice(5,7)), d:Number(iss.dt.slice(8,10)), ti:'', to:'', ot:0, ott:'', st:newStatus, nt:'تعديل قرار سابق', isLate:false, createdAt:new Date().toISOString()});
+      sv('att', DB.att);
+    }
+  }
+
+  // تحديث سجل المتابعة مع الاحتفاظ بتاريخ التعديلات كاملاً
+  iss.history = iss.history || [];
+  iss.history.push({from:iss.finalAction, to:actionType, by:session.name, at:new Date().toISOString()});
+  iss.finalAction = actionType;
+  iss.status = 'تم التعديل';
+  iss.decidedBy = session.name;
+  iss.decidedAt = new Date().toISOString();
+  sv('issues', DB.issues);
+
+  logActivity('تعديل قرار سابق', emp.nm+' — '+iss.dt+' — '+actionLabels[actionType]);
+  toast('✅ تم تعديل القرار بنجاح','success');
+  refreshAfterIssueAction();
+  if(typeof renderActionTracking==='function') renderActionTracking();
+}
+
 function resolveAttIssue(issueId, actionType){
   const session = getSession();
   if(!session || !(session.role==='admin' || session.perms?.att_edit)){
@@ -6297,6 +6372,19 @@ function viewTrackingDetail(id){
         + "<button onclick=\"dismissAttIssue('"+iss.id+"');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>موافقة على الإجراء</button>"
         + "</div>";
     }
+  } else if(canAct && (iss.status==='تمت الموافقة'||iss.status==='تم التعديل'||iss.status==='تم الاعتماد يدويًا')){
+    // قرار سابق — نتيح تعديله لو حصل خطأ
+    actionsHtml =
+      "<div style='margin-top:6px'>"
+      + "<button onclick=\"showEditPastDecision('"+iss.id+"')\" class='btn bg bs' style='background:#eef2ff;color:#0f2057'><span class='ms ms-sm'>edit</span> تعديل القرار</button>"
+      + "<div id='edit-past-actions-"+iss.id+"' style='display:none;flex-wrap:wrap;gap:6px;margin-top:8px'>"
+      +   "<button onclick=\"editPastDecision('"+iss.id+"','rest_swap');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
+      +   "<button onclick=\"editPastDecision('"+iss.id+"','permitted');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
+      +   "<button onclick=\"editPastDecision('"+iss.id+"','unauthorized');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
+      +   "<button onclick=\"editPastDecision('"+iss.id+"','leave');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+      +   "<button onclick=\"editPastDecision('"+iss.id+"','rest');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>راحة أسبوعية</button>"
+      + "</div>"
+      + "</div>";
   }
 
   mo.innerHTML =
