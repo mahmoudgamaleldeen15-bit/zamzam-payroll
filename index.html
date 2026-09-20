@@ -1783,6 +1783,32 @@ async function initFirebase(){
   }
 }
 
+
+// ===== معالجة انقطاع/رجوع الإنترنت — إشعار بسيط بس، من غير ما يعطّل الشغل =====
+// البرنامج أصلاً بيحفظ محليًا أولًا في كل حفظة (زي ما هو الحال دايمًا)،
+// فطول ما النت مقطوع هيفضل يشتغل عادي، وبمجرد ما يرجع بنرفع اللي اتحفظ تلقائيًا
+window.addEventListener('offline', ()=>{
+  try{ toast('🔌 انقطع الاتصال بالإنترنت — هيفضل البرنامج يحفظ عندك محليًا لحد ما يرجع الاتصال', 'error'); }catch(e){}
+});
+
+window.addEventListener('online', async ()=>{
+  try{
+    toast('✅ رجع الاتصال بالإنترنت — جاري رفع أي بيانات اتحفظت وانت أوفلاين...', 'info');
+    await reconnectFirebase();
+    if(fbOnline){
+      await fbUploadAll();
+      try{ fbStartRealtimeSync(); }catch(e){}
+      try{ listenFpStatusInfo(); }catch(e){}
+    }
+  } catch(e){}
+});
+
+// ===== إعادة محاولة الاتصال بفايربيز (كانت مقفولة نهائيًا بعد أول فشل قبل كده) =====
+async function reconnectFirebase(){
+  fbInitialized = false;
+  return await initFirebase();
+}
+
 // ===== مؤشر Firebase في الـ topbar =====
 function updateFbIndicator(online){
   const dot = document.getElementById('fb-dot');
@@ -2158,8 +2184,9 @@ async function initFirebaseOnLogin(){
     await fbAutoSyncOnLogin();
     // مراقبة التحديثات اللحظية
     fbStartRealtimeSync();
-    // مراقبة حالة اتصال البصمة بين الأجهزة (تغيير فقط، بدون استهلاك زائد)
-    listenFpStatusRealtime();
+    // إعلام بصري بس عن حالة البصمة على باقي الأجهزة — معزول تمامًا،
+    // أي خطأ هنا ميوقفش باقي عملية تسجيل الدخول أو الاتصال بفايربيز
+    try{ listenFpStatusInfo(); } catch(e){}
   }
 }
 
@@ -4040,10 +4067,10 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected){
 
         <!-- الصافي + التوقيع -->
         <div style="margin-top:14px;border-top:2px dashed #e2eaf6;padding-top:12px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px">
-          <div style="background:linear-gradient(135deg,#0f2057,#0ea5a0);border-radius:9px;padding:11px;text-align:center">
-            <div style="font-size:10px;color:#7dd8f5;margin-bottom:4px">صافي المرتب</div>
-            <div style="font-size:11px;color:#b8d8f8;border-top:1px solid rgba(255,255,255,.25);padding-top:5px;margin-top:3px">........................</div>
-            <div style="font-size:9px;color:#7dd8f5;margin-top:2px">ج.م</div>
+          <div style="background:#fff;border:1.5px dashed #0f2057;border-radius:9px;padding:11px;text-align:center">
+            <div style="font-size:10px;color:#0f2057;font-weight:800;margin-bottom:4px">صافي المرتب</div>
+            <div style="font-size:11px;color:#4a5982;border-top:1px solid #e2eaf6;padding-top:5px;margin-top:3px">........................</div>
+            <div style="font-size:9px;color:#0f2057;margin-top:2px">ج.م</div>
           </div>
           <div style="border:1.5px dashed #e2eaf6;border-radius:9px;padding:11px;text-align:center">
             <div style="font-size:10px;color:#4a5982;margin-bottom:3px">توقيع الموظف</div>
@@ -4558,7 +4585,70 @@ function saveLeave(autoPrint=false){
 }
 
 function viewLeaveHistory(eid, year){
-  const e=DB.emp.find(x=>x.id===eid);const recs=DB.leaves.filter(l=>l.eid===eid&&l.year===Number(year));const used=recs.reduce((s,l)=>s+Number(l.days||0),0);const bal=Number(e?.leaveBal||30);let msg=`إجازات ${e?.nm||'—'} — ${year}\nالرصيد:${bal} يوم | مأخوذ:${used} | متبقي:${bal-used}\n\n`;recs.forEach(r=>msg+=`${r.from} → ${r.to} (${r.days} يوم) ${r.note?'- '+r.note:''}\n`);alert(msg||'لا إجازات مسجلة');}
+  const e = DB.emp.find(x=>x.id===eid);
+  if(!e) return;
+  const recs = DB.leaves.filter(l=>l.eid===eid&&l.year===Number(year)&&l.status!=='ملغاة').sort((a,b)=>a.from.localeCompare(b.from));
+  const used = recs.reduce((s,l)=>s+Number(l.days||0),0);
+  const bal = Number(e.leaveBal||30);
+
+  // نفكّ كل سجل إجازة (ممكن يكون نطاق أيام) لأيام فردية — عشان نقدر نلغي يوم واحد بعينه
+  // بنفس منطق الإلغاء الآمن اللي بيحترم باقي أيام السجل (تقسيم بدل إلغاء الكل)
+  const days = [];
+  recs.forEach(rec=>{
+    let cur = new Date(rec.from+'T00:00:00');
+    const last = new Date(rec.to+'T00:00:00');
+    while(cur<=last){
+      days.push({dt: cur.toISOString().slice(0,10), note: rec.note||''});
+      cur.setDate(cur.getDate()+1);
+    }
+  });
+
+  document.getElementById('leave-hist-mo')?.remove();
+  const mo = document.createElement('div');
+  mo.className='mo open'; mo.id='leave-hist-mo';
+  mo.style.cssText='display:flex;z-index:400';
+
+  const session = getSession();
+  const canEdit = session && (session.role==='admin' || session.perms?.leave);
+
+  mo.innerHTML = `
+    <div class="mb" style="max-width:440px;max-height:85vh;overflow-y:auto;padding:0">
+      <div style="background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:16px 20px;display:flex;align-items:center;gap:10px">
+        <span class="ms" style="color:#fff">history</span>
+        <div style="flex:1"><div style="font-size:14px;font-weight:800;color:#fff">سجل إجازات ${e.nm}</div><div style="font-size:11px;color:#7dd8f5">سنة ${year} — الرصيد ${bal} | مأخوذ ${used} | متبقٍ ${bal-used}</div></div>
+        <button onclick="document.getElementById('leave-hist-mo').remove()" style="background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff"><span class="ms">close</span></button>
+      </div>
+      <div style="padding:14px 16px">
+        ${!days.length ? '<div style="text-align:center;padding:24px;color:#94a3b8">لا توجد إجازات مسجلة</div>' :
+          days.map(d=>`
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#f8faff;border-radius:9px;margin-bottom:6px">
+            <div><span style="font-size:12.5px;font-weight:700;color:#0d1b3e">${d.dt}</span>${d.note?`<span style="font-size:10.5px;color:#94a3b8;margin-right:6px">— ${d.note}</span>`:''}</div>
+            ${canEdit ? `<button onclick="cancelLeaveDay('${eid}','${d.dt}','${year}')" class="btn bg bi bs" style="background:#ffe5e5;color:#e03131" title="إلغاء هذا اليوم"><span class="ms ms-sm">close</span></button>` : ''}
+          </div>`).join('')}
+      </div>
+    </div>`;
+  document.body.appendChild(mo);
+}
+
+// ===== إلغاء يوم إجازة واحد بعينه — لو اتسجل بالغلط أو لم توافق الإدارة عليه =====
+function cancelLeaveDay(eid, dt, year){
+  const session = getSession();
+  if(!session || !(session.role==='admin' || session.perms?.leave)){
+    toast('ليس لديك صلاحية','error'); return;
+  }
+  if(!confirm('إلغاء إجازة يوم '+dt+'؟ سيرجع اليوم رصيدًا ويُعاد تصنيفه كحضور.')) return;
+
+  const attRec = DB.att.find(a=>a.eid===eid && a.dt===dt && a.st==='إجازة اعتيادية');
+  if(!attRec){ toast('لم يتم العثور على سجل هذا اليوم','error'); return; }
+
+  // نفس منطق التحويل الموحّد — بيرجّع الرصيد صح حتى لو اليوم ده جزء من طلب متعدد الأيام
+  convertAttStatus(attRec.id, 'حضور');
+
+  toast('✅ تم إلغاء الإجازة — رجع اليوم للرصيد','success');
+  document.getElementById('leave-hist-mo')?.remove();
+  renderLeave();
+  viewLeaveHistory(eid, year);
+}
 
 // ===================== REST DAYS (الراحات الأسبوعية) =====================
 function initRestDaysYear(){
@@ -5603,58 +5693,44 @@ function updateServerIndicator(online){
 }
 
 // =====================================================
-// تزامن حالة اتصال البصمة بين كل الأجهزة — Firebase
-// المبدأ: أي جهاز بيتأكد بنفسه من اتصاله المحلي بالبصمة
-// (زي ما هو تمامًا)، لكن يرفع لفايربيز *فقط* لما حالته
-// تتغيّر فعليًا، ومفيش أي جهاز بيكتب "غير متصل" فوق حالة
-// صحيحة لجهاز تاني — الكتابة مقصورة على الجهاز اللي فعلاً
-// نجح يتصل بالبصمة مرة على الأقل في الجلسة دي
+// إعلام بصري بس عن حالة البصمة على باقي الأجهزة —
+// نسخة مبسّطة ومعزولة تمامًا: أي خطأ فيها لازم يُبتلع بصمت
+// ولا يؤثر إطلاقًا على مؤشر الجهاز المحلي ولا على اتصال فايربيز نفسه
 // =====================================================
-let fpLocalStatus = null;            // آخر حالة معروفة من الفحص المباشر لهذا الجهاز
-let fpNetworkStatus = null;          // آخر حالة معروفة من فايربيز (مشتركة)
-let fpHasEverConnectedLocally = false; // هل نجح هذا الجهاز يتصل بالبصمة فعليًا مرة على الأقل
+let _lastNotifiedFpStatus = null;
 
-// ===== استدعاء بعد كل فحص محلي (checkServerStatus) =====
-function handleLocalFpStatus(online){
-  if(online) fpHasEverConnectedLocally = true;
-  const changed = fpLocalStatus !== online;
-  fpLocalStatus = online;
-
-  // تحديث الواجهة فورًا — متصل لو الجهاز ده نفسه متصل، أو لو جهاز تاني مُبلّغ إنه متصل
-  updateServerIndicator(online || fpNetworkStatus===true);
-
-  // الكتابة لفايربيز مقصورة على الجهاز اللي فعلاً له وصول حقيقي للبصمة —
-  // عشان جهاز بعيد (زي محاسب شغال من مكان تاني) ميكتبش "غير متصل" فوق حالة صحيحة
-  if(fpHasEverConnectedLocally && changed){
-    pushFpStatusToFirebase(online);
-  }
-}
-
-async function pushFpStatusToFirebase(online){
-  if(!fbOnline || !window._fb) return;
+function notifyFpStatusIfChanged(online){
   try{
+    if(_lastNotifiedFpStatus === online) return; // نفس الحالة — مفيش داعي نرفع تاني
+    _lastNotifiedFpStatus = online;
+    if(!fbOnline || !window._fb) return;
     const { ref, set, db } = window._fb;
-    await set(ref(db, 'zz/fpStatus'), {
-      online, ts: new Date().toISOString(),
-      device: (navigator.userAgent||'').slice(0,60)
-    });
-  } catch(e){}
+    set(ref(db, 'zz/fpStatus'), {online, ts: Date.now()}).catch(()=>{});
+  } catch(e){ /* ميزة إعلامية بس — أي خطأ يتجاهل بصمت */ }
 }
 
-// ===== مراقبة لحظية — بس تستمع، لا تكتب إلا في الحالة أعلاه =====
-function listenFpStatusRealtime(){
-  if(!fbOnline || !window._fb) return;
-  const { ref, onValue, db } = window._fb;
-  onValue(ref(db, 'zz/fpStatus'), (snap)=>{
-    if(!snap.exists()) return;
-    const val = snap.val();
-    fpNetworkStatus = val.online;
-    // لو الجهاز ده نفسه غير متصل محليًا، نعكس حالة الشبكة على الواجهة
-    if(!fpLocalStatus){
-      updateServerIndicator(fpNetworkStatus===true);
-    }
-  });
+function listenFpStatusInfo(){
+  try{
+    if(!fbOnline || !window._fb) return;
+    const { ref, onValue, db } = window._fb;
+    onValue(
+      ref(db, 'zz/fpStatus'),
+      (snap)=>{
+        try{
+          if(!snap.exists()) return;
+          const val = snap.val();
+          // نحدّث المؤشر بس لو الجهاز ده نفسه مالوش اتصال مباشر حاليًا —
+          // عشان مؤشر الجهاز المتصل فعليًا يفضل دايمًا يعكس حالته الحقيقية هو بس
+          if(!window._fpHasDirectConn){
+            updateServerIndicator(val.online===true);
+          }
+        } catch(e){}
+      },
+      ()=>{ /* خطأ صلاحيات أو أي حاجة — يتجاهل بصمت، مايكسرش حاجة */ }
+    );
+  } catch(e){ /* تجاهل تمامًا */ }
 }
+
 
 async function checkServerStatus(){
   try{
@@ -5663,10 +5739,14 @@ async function checkServerStatus(){
     });
     const data = await res.json();
     const online = data.status==='ok';
-    handleLocalFpStatus(online);
+    window._fpHasDirectConn = online;
+    updateServerIndicator(online);
+    notifyFpStatusIfChanged(online);
     return online;
   } catch(e){
-    handleLocalFpStatus(false);
+    window._fpHasDirectConn = false;
+    updateServerIndicator(false);
+    notifyFpStatusIfChanged(false);
     return false;
   }
 }
@@ -5685,10 +5765,10 @@ async function performFingerprintSync(){
   try {
     const res = await fetch('http://localhost:7788/ping', {signal: AbortSignal.timeout(2000)});
     const data = await res.json();
-    // لازم يمر على المعالج الموحّد (مش تحديث مباشر) — عشان يرفع
-    // التغيير لفايربيز ويوصل لباقي الأجهزة، مش بس يحدّث شاشة الجهاز ده
-    handleLocalFpStatus(true);
-    if(data.status !== 'ok'){ handleLocalFpStatus(false); return result; }
+    window._fpHasDirectConn = true;
+    updateServerIndicator(true);
+    notifyFpStatusIfChanged(true);
+    if(data.status !== 'ok'){ window._fpHasDirectConn=false; updateServerIndicator(false); notifyFpStatusIfChanged(false); return result; }
     result.serverOk = true;
 
     const syncRes = await fetch(
@@ -5749,8 +5829,10 @@ async function performFingerprintSync(){
       renderDash(); renderAtt();
     }
   } catch(e) {
-    // السيرفر مش شغال أو فيه مشكلة اتصال — نسجّل الحالة (بيرفعها لفايربيز لو كانت اتغيّرت)
-    handleLocalFpStatus(false);
+    // السيرفر مش شغال أو فيه مشكلة اتصال
+    window._fpHasDirectConn = false;
+    updateServerIndicator(false);
+    notifyFpStatusIfChanged(false);
   }
   return result;
 }
