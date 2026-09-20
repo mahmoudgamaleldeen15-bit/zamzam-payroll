@@ -2895,7 +2895,15 @@ function renderAtt(){
       return `<span style="font-size:11px;font-weight:700;color:${col}">${txt}</span>`;
     })()}
   </td>
-  <td style="text-align:center"><span class="bd" style="background:${bg};color:${cl}">${isEmpty?'لا يوجد سجل':a.st}</span></td>
+  <td style="text-align:center">
+    <span class="bd" style="background:${bg};color:${cl}">${isEmpty?'لا يوجد سجل':a.st}</span>
+    ${isEmpty&&isRestDow?'<div style="font-size:9.5px;color:#d97706;margin-top:2px">⏳ يوم الراحة المعتاد — لم يُستحق بعد</div>':''}
+    ${(()=>{
+      const pendingIss = DB.issues.find(i=>i.eid===a.eid&&i.dt===a.dt&&i.status==='بانتظار المراجعة');
+      if(!pendingIss) return '';
+      return '<div onclick="showNotifications()" style="cursor:pointer;display:flex;align-items:center;justify-content:center;gap:3px;margin-top:3px;background:#fff7ed;border-radius:6px;padding:2px 6px" title="'+pendingIss.systemFinding+'"><span class="ms ms-sm" style="color:#ea580c;font-size:13px">arrow_upward</span><span style="font-size:9.5px;color:#ea580c;font-weight:700">يحتاج مراجعة</span></div>';
+    })()}
+  </td>
   <td style="text-align:center">
     <div style="display:flex;gap:3px;justify-content:center">
       ${isEmpty?(isAdmin?`<button class="btn bg bs" onclick="openEmptyDayEdit('${a.eid}','${a.dt}')" title="تحديد حالة اليوم" style="background:#fffbeb;color:#d97706"><span class="ms ms-sm">edit_calendar</span></button>`:'<span style="color:#94a3b8;font-size:11px">—</span>'):(isAdmin?`<button class="btn bg bs" onclick="openAttEdit('${a.id}')" title="تعديل" style="background:#eef2ff;color:#0f2057"><span class="ms ms-sm">edit</span></button>`:'')+(isAdmin?`<button class="btn bd2 bi bs" onclick="delAtt('${a.id}')" title="حذف"><span class="ms ms-sm">delete</span></button>`:'')+(!isAdmin?'<span style="color:#94a3b8;font-size:11px">—</span>':'')}
@@ -3011,6 +3019,8 @@ function saveAttEdit(attId){
   if(!session || session.role !== 'admin'){ toast('صلاحية مرفوضة','error'); return; }
   const idx = DB.att.findIndex(a=>a.id===attId);
   if(idx<0) return;
+  // نحفظ الفلتر الحالي (الموظف المختار) قبل أي تحديث، ونضمن رجوعه بعد الحفظ
+  const preservedEf = document.getElementById('at-ef')?.value || '';
 
   const ti = document.getElementById('att-ed-ti')?.value || '';
   const to = document.getElementById('att-ed-to')?.value || '';
@@ -3055,12 +3065,20 @@ function saveAttEdit(attId){
     logActivity('تعديل سجل حضور', `${DB.emp.find(e=>e.id===DB.att[idx].eid)?.nm} — ${DB.att[idx].dt}`);
   }
 
+  // نعيد فحص دورة الراحة فورًا — لو التعديل ده خلّى يوم تاني (بعده) يستحق
+  // راحة/بدل راحة، يتحدد وينضاف كتنبيه للمراجعة على طول
+  if(typeof scanAttendanceIssues==='function') scanAttendanceIssues();
+
   document.getElementById('att-edit-mo')?.remove();
   toast('✅ تم حفظ التعديل','success');
   renderAtt();
   if(typeof renderLeave==='function') renderLeave();
   if(typeof renderDash==='function') renderDash();
   if(typeof renderPay==='function') renderPay();
+
+  // نضمن إن فلتر الموظف يفضل زي ما كان — بغض النظر عن أي حاجة تانية غيّرته
+  const efEl2 = document.getElementById('at-ef');
+  if(efEl2 && efEl2.value !== preservedEf){ efEl2.value = preservedEf; renderAtt(); }
 }
 
 function formatTime12(t){
@@ -4980,16 +4998,17 @@ function scanAttendanceIssues(){
           createdAt: new Date().toISOString()
         });
         attChanged = true;
-        // سجل متابعة إجراءات — تلقائي وواضح، بدون حاجة لموافقة (مفيش غموض)
+        // سجل متابعة إجراءات — بيتنفذ تلقائي (الحالة بتتسجل فورًا) لكن بيفضل
+        // بانتظار مراجعة المحاسب، خصوصًا لو ده نتيجة تعديل رجعي على يوم سابق
         const trackId = 'trk_'+e.id+'_'+dt;
         if(!DB.issues.find(i=>i.id===trackId)){
           DB.issues.push({
             id: trackId, eid:e.id, dt, type:'راحة أسبوعية',
-            systemFinding:'الموظف أكمل 6 أيام عمل محتسبة، ولم يسجل حضورًا في يوم الراحة',
-            suggestedAction:'rest', executedAction:'rest', finalAction:'rest',
-            status:'تمت الموافقة', history:[],
+            systemFinding:'الموظف أكمل 6 أيام عمل محتسبة، ولم يسجل حضورًا في يوم الراحة — تم تسجيله راحة أسبوعية تلقائيًا، يرجى المراجعة',
+            suggestedAction:'rest', executedAction:'rest', finalAction:null,
+            status:'بانتظار المراجعة', history:[],
             createdAt:new Date().toISOString(), createdBy:'نظام',
-            decidedBy:'نظام', decidedAt:new Date().toISOString()
+            decidedBy:null, decidedAt:null
           });
           issuesChanged = true;
         }
@@ -5205,7 +5224,8 @@ function showNotifications(){
   const typeMeta = {
     'no_attendance': {icon:'warning', color:'#e03131', title:'تنبيه غياب يحتاج إجراء'},
     'بدل راحة':      {icon:'swap_horiz', color:'#0369a1', title:'تسجيل بدل راحة تلقائي — يحتاج مراجعة'},
-    'نقص انصراف':    {icon:'schedule', color:'#d97706', title:'نقص تسجيل انصراف'}
+    'نقص انصراف':    {icon:'schedule', color:'#d97706', title:'نقص تسجيل انصراف'},
+    'راحة أسبوعية':  {icon:'beach_access', color:'#7c3aed', title:'تسجيل راحة أسبوعية تلقائي — يحتاج مراجعة'}
   };
 
   const issuesHtml = pending.map(iss=>{
@@ -5390,12 +5410,15 @@ function dismissAttIssue(issueId){
 
 // ===== تحديث الواجهة بعد أي إجراء على تنبيه =====
 function refreshAfterIssueAction(){
+  const preservedEf = document.getElementById('at-ef')?.value || '';
   if(typeof renderDash==='function') renderDash();
   if(typeof renderAtt==='function') renderAtt();
   if(typeof renderPay==='function') renderPay();
   if(typeof renderLeave==='function') renderLeave();
   if(typeof renderActionTracking==='function') renderActionTracking();
   updateNotifDot();
+  const efEl3 = document.getElementById('at-ef');
+  if(efEl3 && efEl3.value !== preservedEf){ efEl3.value = preservedEf; renderAtt(); }
   // إعادة فتح لوحة الإشعارات محدّثة
   const wasOpen = document.getElementById('notif-panel-mo');
   if(wasOpen){ wasOpen.remove(); showNotifications(); }
