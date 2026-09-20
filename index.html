@@ -787,6 +787,13 @@ body.auth-mode {
         <div><label class="fl">بدل النقل (ج.م/شهر)</label><input class="fi" id="r-tr" type="number" value="500"/></div>
         <div><label class="fl">بدل المعيشة (ج.م/شهر)</label><input class="fi" id="r-lv" type="number" value="300"/></div>
         <div><label class="fl">مكافأة الإنتاج (% من الأساسي)</label><input class="fi" id="r-bn" type="number" value="10"/></div>
+        <div><label class="fl">تقريب صافي المرتب</label>
+          <select class="fi" id="r-net-round">
+            <option value="none">بدون تقريب</option>
+            <option value="r50_100">لأقرب 50 أو 100 ج.م</option>
+          </select>
+          <div style="font-size:10.5px;color:#94a3b8;margin-top:3px">لو العشرات 1-50 → لأقرب 50، ولو 51-99 → لأقرب 100 (مثال: 15,005 ← 15,050 / 15,055 ← 15,100)</div>
+        </div>
       </div>
     </div>
   </div>
@@ -2479,7 +2486,23 @@ function calcSlip(emp){
     return s + (isFinite(inst)?inst:0);
   },0);
   // المسحوبات — تجميع الشهر الحالي
-  const drawsTotal=DB.draws.filter(d=>d.eid===emp.id&&Number(d.y)===DB.cycle.y&&Number(d.m)===DB.cycle.m).reduce((s,d)=>s+Number(d.am||0),0);const gross=basic+allow+otVal,deduct=insEmp+pen+advInst+drawsTotal,net=Math.max(0,gross-deduct);return{basic,allow,allowInCalc,allowOutCalc,otVal,otHrs:totalOt,otDetails,gross,insEmp,absPen,unAuthPen,unAuthDays,latePen,pen,advInst,drawsTotal,deduct,net};}
+  const drawsTotal=DB.draws.filter(d=>d.eid===emp.id&&Number(d.y)===DB.cycle.y&&Number(d.m)===DB.cycle.m).reduce((s,d)=>s+Number(d.am||0),0);const gross=basic+allow+otVal,deduct=insEmp+pen+advInst+drawsTotal;
+  const rawNet=Math.max(0,gross-deduct);
+  const net=roundNetSalary(rawNet);
+  return{basic,allow,allowInCalc,allowOutCalc,otVal,otHrs:totalOt,otDetails,gross,insEmp,absPen,unAuthPen,unAuthDays,latePen,pen,advInst,drawsTotal,deduct,net,rawNet};}
+
+// ===== تقريب صافي المرتب حسب القاعدة المختارة في الإعدادات =====
+// none: بدون تقريب | r50_100: العشرات 1-50 → لأقرب 50 | العشرات 51-99 → لأقرب 100
+function roundNetSalary(net){
+  const mode = DB.rules['net_round_mode']||'none';
+  if(mode!=='r50_100') return net;
+  const rounded = Math.round(net);
+  const rem = rounded % 100;
+  const base = rounded - rem;
+  if(rem===0) return base;
+  if(rem<=50) return base+50;
+  return base+100;
+}
 
 // ===================== DASHBOARD =====================
 function renderDash(){
@@ -2717,11 +2740,54 @@ function renderAtt(){
     recs=recs.filter(a=>a.y===Number(y)&&a.m===Number(m));
   } else {
     recs=recs.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);
-  }const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;const tb=document.getElementById('at-body');if(!recs.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">fingerprint</span>لا سجلات</td></tr>';return}
+  }const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;
+
+  // ===== عرض كل أيام الفترة المحددة — حتى الأيام اللي مالهاش سجل خالص =====
+  // (بس لما يكون فيه موظف محدد؛ "كل الموظفين" يفضل زي ما هو تفاديًا لقائمة ضخمة)
+  let displayList = recs;
+  if(ef){
+    const todayStr = getCairoTodayStr();
+    let rangeFrom, rangeTo;
+    if(fromD && toD){
+      rangeFrom = fromD <= toD ? fromD : toD;
+      rangeTo   = fromD <= toD ? toD : fromD;
+    } else if(fromD){
+      rangeFrom = fromD; rangeTo = todayStr;
+    } else {
+      let y, m;
+      if(mf){ [y,m] = mf.split('-').map(Number); }
+      else { y = DB.cycle.y; m = DB.cycle.m; }
+      rangeFrom = y+'-'+String(m).padStart(2,'0')+'-01';
+      const lastDay = new Date(y, m, 0).getDate();
+      rangeTo = y+'-'+String(m).padStart(2,'0')+'-'+String(lastDay).padStart(2,'0');
+    }
+    if(rangeTo > todayStr) rangeTo = todayStr; // متعرضش أيام مستقبلية
+
+    const byDate = {};
+    recs.forEach(a=>{ byDate[a.dt] = a; });
+
+    displayList = [];
+    let cur = new Date(rangeFrom+'T00:00:00');
+    const last = new Date(rangeTo+'T00:00:00');
+    let guard=0;
+    while(cur <= last && guard<370){
+      const dt = cur.toISOString().slice(0,10);
+      displayList.push(byDate[dt] || {eid:ef, dt, ti:'', to:'', ot:0, st:null, __placeholder:true});
+      cur.setDate(cur.getDate()+1);
+      guard++;
+    }
+  }
+
+  const tb=document.getElementById('at-body');
+  if(!displayList.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">fingerprint</span>لا سجلات</td></tr>';return}
   const isAdmin=getSession()?.role==='admin';
-  tb.innerHTML=recs.sort((a,b)=>b.dt.localeCompare(a.dt)).map(a=>{
-    const e=DB.emp.find(x=>x.id===a.eid);const bg=a.st==='حضور'?'#dcfce7':a.st==='غياب بدون إذن'?'#ffe5e5':a.st==='إجازة اعتيادية'?'#f0edff':a.st==='راحة أسبوعية'?'#e0f2fe':a.st==='غياب بإذن'?'#fef3c7':a.st==='يوم عمل إضافي'?'#e0e7ff':'#fff7ed';const cl=a.st==='حضور'?'#16a34a':a.st==='غياب بدون إذن'?'#e03131':a.st==='إجازة اعتيادية'?'#7c3aed':a.st==='راحة أسبوعية'?'#0369a1':a.st==='غياب بإذن'?'#d97706':a.st==='يوم عمل إضافي'?'#4338ca':'#ea580c';
+  tb.innerHTML=displayList.sort((a,b)=>b.dt.localeCompare(a.dt)).map(a=>{
+    const e=DB.emp.find(x=>x.id===a.eid);
+    const isEmpty=a.__placeholder||a.st===null||a.st===undefined;
+    const bg=isEmpty?'#f8fafc':a.st==='حضور'?'#dcfce7':a.st==='غياب بدون إذن'?'#ffe5e5':a.st==='إجازة اعتيادية'?'#f0edff':a.st==='راحة أسبوعية'?'#e0f2fe':a.st==='غياب بإذن'?'#fef3c7':a.st==='يوم عمل إضافي'?'#e0e7ff':'#fff7ed';
+    const cl=isEmpty?'#94a3b8':a.st==='حضور'?'#16a34a':a.st==='غياب بدون إذن'?'#e03131':a.st==='إجازة اعتيادية'?'#7c3aed':a.st==='راحة أسبوعية'?'#0369a1':a.st==='غياب بإذن'?'#d97706':a.st==='يوم عمل إضافي'?'#4338ca':'#ea580c';
     // تمييز يوم الراحة الأسبوعية المحدد للموظف بلون أصفر — حسب يوم كل موظف تحديدًا
+    // (بما فيها الأيام اللي مالهاش سجل خالص)
     const rdN=(e&&e.restDay!==undefined&&e.restDay!=='')?Number(e.restDay):-1;
     const [ry,rm,rdd]=a.dt.split('-').map(Number);
     const isRestDow=rdN>=0 && new Date(ry,rm-1,rdd).getDay()===rdN;
@@ -2752,12 +2818,10 @@ function renderAtt(){
       return `<span style="font-size:11px;font-weight:700;color:${col}">${txt}</span>`;
     })()}
   </td>
-  <td style="text-align:center"><span class="bd" style="background:${bg};color:${cl}">${a.st}</span></td>
+  <td style="text-align:center"><span class="bd" style="background:${bg};color:${cl}">${isEmpty?'لا يوجد سجل':a.st}</span></td>
   <td style="text-align:center">
     <div style="display:flex;gap:3px;justify-content:center">
-      ${isAdmin?`<button class="btn bg bs" onclick="openAttEdit('${a.id}')" title="تعديل" style="background:#eef2ff;color:#0f2057"><span class="ms ms-sm">edit</span></button>`:''}
-      ${isAdmin?`<button class="btn bd2 bi bs" onclick="delAtt('${a.id}')" title="حذف"><span class="ms ms-sm">delete</span></button>`:''}
-      ${!isAdmin?'<span style="color:#94a3b8;font-size:11px">—</span>':''}
+      ${isEmpty?'<span style="color:#94a3b8;font-size:11px">—</span>':(isAdmin?`<button class="btn bg bs" onclick="openAttEdit('${a.id}')" title="تعديل" style="background:#eef2ff;color:#0f2057"><span class="ms ms-sm">edit</span></button>`:'')+(isAdmin?`<button class="btn bd2 bi bs" onclick="delAtt('${a.id}')" title="حذف"><span class="ms ms-sm">delete</span></button>`:'')+(!isAdmin?'<span style="color:#94a3b8;font-size:11px">—</span>':'')}
     </div>
   </td>
 </tr>`;}).join('');}
@@ -3179,12 +3243,12 @@ function exportArcCSV(arcId){
 
 // ===================== RULES =====================
 function loadRules(){
-  const def={ins_co:26,ins_fixed:0,ot_rg:1.5,ot_hl:2,ot_mx:120,lt_gr:15,lt_ml:1,ab_ml:1,r_tr:500,r_lv:300,r_bn:10,unauth_mode:'full',r_unauth_ml:1};const r={...def,...DB.rules};const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn'};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=r[k]});const umEl=document.getElementById('r-unauth-mode');if(umEl)umEl.value=r['unauth_mode']||'full';const umlEl=document.getElementById('r-unauth-ml');if(umlEl)umlEl.value=r['r_unauth_ml']||1;// أوفرتايم
+  const def={ins_co:26,ins_fixed:0,ot_rg:1.5,ot_hl:2,ot_mx:120,lt_gr:15,lt_ml:1,ab_ml:1,r_tr:500,r_lv:300,r_bn:10,unauth_mode:'full',r_unauth_ml:1};const r={...def,...DB.rules};const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=r[k]});const umEl=document.getElementById('r-unauth-mode');if(umEl)umEl.value=r['unauth_mode']||'full';const umlEl=document.getElementById('r-unauth-ml');if(umlEl)umlEl.value=r['r_unauth_ml']||1;// أوفرتايم
   const otHrBase=document.getElementById('r-ot-hr-base');if(otHrBase)otHrBase.value=r['ot_hr_base']||'basic';const otRgMode=document.getElementById('r-ot-rg-mode');if(otRgMode)otRgMode.value=r['ot_rg_mode']||'1.5';const otDayMode=document.getElementById('r-ot-day-mode');if(otDayMode){otDayMode.value=r['ot_day_mode']||'full_1';document.getElementById('r-ot-day-fixed-wrap').style.display=r['ot_day_mode']==='fixed'?'block':'none';}
   const otDayFixed=document.getElementById('r-ot-day-fixed');if(otDayFixed)otDayFixed.value=r['ot_day_fixed']||0;const otRestMode=document.getElementById('r-ot-rest-mode');if(otRestMode){otRestMode.value=r['ot_rest_mode']||'full_2';document.getElementById('r-ot-rest-fixed-wrap').style.display=r['ot_rest_mode']==='fixed'?'block':'none';}
   const otRestFixed=document.getElementById('r-ot-rest-fixed');if(otRestFixed)otRestFixed.value=r['ot_rest_fixed']||0;}
 function saveRules(){
-  const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn'};const r={};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)r[k]=el.value});const umSv=document.getElementById('r-unauth-mode');if(umSv)r['unauth_mode']=umSv.value;const umlSv=document.getElementById('r-unauth-ml');if(umlSv)r['r_unauth_ml']=umlSv.value;// أوفرتايم
+  const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};const r={};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)r[k]=el.value});const umSv=document.getElementById('r-unauth-mode');if(umSv)r['unauth_mode']=umSv.value;const umlSv=document.getElementById('r-unauth-ml');if(umlSv)r['r_unauth_ml']=umlSv.value;// أوفرتايم
   const svOtHrBase=document.getElementById('r-ot-hr-base');if(svOtHrBase)r['ot_hr_base']=svOtHrBase.value;const svOtRg=document.getElementById('r-ot-rg-mode');if(svOtRg)r['ot_rg_mode']=svOtRg.value;const svOtDay=document.getElementById('r-ot-day-mode');if(svOtDay)r['ot_day_mode']=svOtDay.value;const svOtDayF=document.getElementById('r-ot-day-fixed');if(svOtDayF)r['ot_day_fixed']=svOtDayF.value;const svOtRest=document.getElementById('r-ot-rest-mode');if(svOtRest)r['ot_rest_mode']=svOtRest.value;const svOtRestF=document.getElementById('r-ot-rest-fixed');if(svOtRestF)r['ot_rest_fixed']=svOtRestF.value;['15','30','45','60'].forEach(n=>{const ltEl=document.getElementById('r-lt-'+n+'-mode');if(ltEl)r['lt_'+n+'_mode']=ltEl.value;});DB.rules=r;sv('rules',DB.rules);toast('تم حفظ القواعد','success');}
 function loadDefRules(){DB.rules={};sv('rules',DB.rules);loadRules();toast('تمت استعادة الافتراضي','info')}
 
