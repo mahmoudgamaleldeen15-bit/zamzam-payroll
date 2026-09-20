@@ -1372,13 +1372,20 @@ body.auth-mode {
       <div>
         <label class="fl" style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="ef-late-ex" style="width:15px;height:15px;accent-color:#0f2057"/>
-          <span>استثناء من جزاء التأخير</span>
+          <span>تخصيص مهلة سماح تأخير مختلفة لهذا الموظف</span>
         </label>
         <div id="ef-late-ex-wrap" style="display:none;margin-top:8px">
           <label class="fl">مدة السماح الخاص بالموظف (دقيقة)</label>
           <input class="fi" id="ef-late-grace" type="number" placeholder="مثال: 30" min="0" max="120"/>
-          <div style="font-size:11px;color:#94a3b8;margin-top:4px">⚠️ هيتجاهل القاعدة العامة ويطبق السماح ده بدلها</div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px">⚠️ هيتجاهل القاعدة العامة ويطبق السماح ده بدلها — لكن خصم التأخير نفسه يفضل مطبّق بعد المهلة دي</div>
         </div>
+      </div>
+      <div style="background:#fff7ed;border-radius:10px;padding:10px 12px;border:1px solid #fed7aa">
+        <label class="fl" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+          <input type="checkbox" id="ef-late-exempt" style="width:15px;height:15px;accent-color:#ea580c"/>
+          <span style="font-weight:700;color:#9a3412">استبعاد هذا الموظف من خصم التأخير نهائيًا</span>
+        </label>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:4px">القاعدة العامة تفضل مطبّقة على كل الموظفين تلقائيًا — الخيار ده بيلغي خصم التأخير لهذا الموظف بالذات فقط، مهما كانت دقائق تأخيره</div>
       </div>
       <div><label class="fl">يوم الراحة الأسبوعي</label>
         <select class="fi" id="ef-rest-day">
@@ -1701,13 +1708,14 @@ const DB={
   adv:JSON.parse(localStorage.getItem('zz_adv')||'[]'),
   chr:JSON.parse(localStorage.getItem('zz_chr')||'[]'),
   rent:JSON.parse(localStorage.getItem('zz_rent')||'[]'),
-  rentArchive:JSON.parse(localStorage.getItem('zz_rent_arc')||'[]'),
+  rentArchive:JSON.parse(localStorage.getItem('zz_rentArchive')||localStorage.getItem('zz_rent_arc')||'[]'),
   rules:JSON.parse(localStorage.getItem('zz_rules')||'{}'),
   cycle:JSON.parse(localStorage.getItem('zz_cycle')||`{"y":${new Date().getFullYear()},"m":${new Date().getMonth()+1}}`),
   draws:JSON.parse(localStorage.getItem('zz_draws')||'[]'),
   leaves:JSON.parse(localStorage.getItem('zz_leaves')||'[]'),
   archives:JSON.parse(localStorage.getItem('zz_archives')||'[]'),
   issues:JSON.parse(localStorage.getItem('zz_issues')||'[]'),
+  payDisburse:JSON.parse(localStorage.getItem('zz_payDisburse')||'[]'),
 };const MAR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const PGS={dashboard:'لوحة التحكم',employees:'الموظفون',payroll:'كشف المرتبات',attendance:'الحضور والأوفرتايم',advances:'السلف والاستقطاعات',draws:'المسحوبات',rent:'الإيجارات الشهرية',formulas:'القواعد والإعدادات',charity:'وحدة الصدقات',reports:'مركز التقارير',leave:'الإجازات الاعتيادية',restdays:'الراحات الأسبوعية',loancheck:'استحقاق السلفة',archive:'الأرشيف',actiontracking:'متابعة الإجراءات'};// =====================================================
 // Firebase Hybrid Sync — زمزم Payroll
 // localStorage (primary) + Firebase (cloud backup/sync)
@@ -1724,7 +1732,7 @@ const FB_CONFIG = {
 };
 
 // الـ DB keys اللي بتتزامن
-const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives','issues'];
+const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives','issues','payDisburse'];
 
 let fbApp = null;
 let fbDB  = null;
@@ -1818,16 +1826,7 @@ async function fbPull(key){
 }
 
 // ===== sv() الجديدة: تحفظ localStorage + ترفع Firebase =====
-const _svOriginal = sv;
-function sv(k, d){
-  // حفظ محلي أولاً (دايماً)
-  _svOriginal(k, d);
-  // رفع Firebase في الخلفية لو متصل + تحديث وقت آخر تعديل
-  // (ضروري عشان أي جهاز تاني يعرف إن فيه تحديث جديد وينزّله تلقائيًا)
-  if(fbSyncEnabled && fbOnline && FB_SYNC_KEYS.includes(k)){
-    fbPush(k, d).then(()=>fbTouchLastUpdate()).catch(()=>{});
-  }
-}
+// (تم دمج sv مع النسخة الموحدة بالأسفل — لمنع تعريفها مرتين)
 
 // ===== تحديث وقت آخر تعديل على Firebase (يُستدعى بعد أي حفظ فعلي) =====
 async function fbTouchLastUpdate(){
@@ -2152,14 +2151,24 @@ async function initFirebaseOnLogin(){
 }
 
 
-// sv الأصلية (قبل override)
-function sv(k,d){
+// sv الأصلية — حفظ محلي بسيط + سجل تدقيق (مُستخدمة داخليًا فقط)
+function _svOriginal(k,d){
   localStorage.setItem('zz_'+k,JSON.stringify(d));
   // سجل بسيط لآخر تعديل
   const log=JSON.parse(localStorage.getItem('zz_audit_log')||'[]');
   log.push({k,ts:new Date().toISOString(),cnt:Array.isArray(d)?d.length:1});
   if(log.length>100) log.splice(0,log.length-100);
   localStorage.setItem('zz_audit_log',JSON.stringify(log));
+}
+
+// sv الموحّدة — الدالة الوحيدة المستخدمة في كل البرنامج:
+// حفظ محلي فورًا + رفع Firebase في الخلفية + تحديث وقت آخر تعديل
+// (تعريف واحد بس في كل الملف — عشان منوقعش في مشكلة hoisting تاني)
+function sv(k, d){
+  _svOriginal(k, d);
+  if(fbSyncEnabled && fbOnline && FB_SYNC_KEYS.includes(k)){
+    fbPush(k, d).then(()=>fbTouchLastUpdate()).catch(()=>{});
+  }
 }
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
 function fc(n){return n!=null?Number(n).toLocaleString('ar-EG',{minimumFractionDigits:0,maximumFractionDigits:0}):'—'}
@@ -2185,7 +2194,24 @@ function mkMonthGrid(){
   DB.cycle.y=Number(document.getElementById('pk-yr').value);const g=document.getElementById('pk-grid');g.innerHTML='';MAR.forEach((m,i)=>{
     const b=document.createElement('button');b.textContent=m;b.style.cssText='padding:7px 4px;border-radius:8px;font-family:Cairo,sans-serif;font-size:12px;font-weight:700;cursor:pointer;border:none;transition:.12s';b.style.background=(i+1)===DB.cycle.m?'#0f2057':'#f0f4fc';b.style.color=(i+1)===DB.cycle.m?'#fff':'#4a5982';b.onclick=()=>{DB.cycle.m=i+1;mkMonthGrid()};g.appendChild(b);});}
 function applyMonth(){
-  sv('cycle',DB.cycle);setCycleLabel();document.getElementById('month-mo').classList.remove('open');toast(`تم تغيير الدورة إلى ${MAR[DB.cycle.m-1]} ${DB.cycle.y}`,'success');renderDash();renderPay();renderRent();}
+  sv('cycle',DB.cycle);setCycleLabel();document.getElementById('month-mo').classList.remove('open');toast(`تم تغيير الدورة إلى ${MAR[DB.cycle.m-1]} ${DB.cycle.y}`,'success');
+  // تحديث كل الصفحات اللي بتعتمد على الشهر الحالي كافتراضي —
+  // أي تاب المحاسب مغيّرش فيه فلتر يدوي هيتبع الشهر الجديد تلقائيًا
+  // (الصفحات اللي فيها فلتر مخصص بالفعل بتفضل زي ما اختارها المحاسب —
+  //  كل دالة عندها أولوية داخلية: فلتر يدوي > الشهر العام)
+  if(typeof renderDash==='function') renderDash();
+  if(typeof renderPay==='function') renderPay();
+  if(typeof renderRent==='function') renderRent();
+  if(typeof renderAtt==='function') renderAtt();
+  if(typeof renderAdv==='function') renderAdv();
+  if(typeof renderDraws==='function') renderDraws();
+  if(typeof renderLeave==='function') renderLeave();
+  if(typeof renderChr==='function') renderChr();
+  if(typeof renderRestDays==='function') renderRestDays();
+  if(typeof scanAttendanceIssues==='function') scanAttendanceIssues();
+  if(typeof renderActionTracking==='function') renderActionTracking();
+  if(typeof updateNotifDot==='function') updateNotifDot();
+}
 
 // ===================== CALC ENGINE =====================
 // ===== دالة مركزية للحساب — Spec Section 3 =====
@@ -2469,7 +2495,8 @@ function calcSlip(emp){
     ? Number(emp.lateGrace)
     : gr('lt_gr',15);
   let latePen=0;
-  const lateRecs=absRecs.filter(a=>Number(a.lateMin||0)>empLateGrace);
+  // استبعاد كامل من خصم التأخير — بغض النظر عن دقائق التأخير الفعلية
+  const lateRecs = emp.lateExempt ? [] : absRecs.filter(a=>Number(a.lateMin||0)>empLateGrace);
   lateRecs.forEach(a=>{
     const mins=Number(a.lateMin||0);
     const dB=dailyBasic;const dG=dailyGross;
@@ -2489,7 +2516,7 @@ function calcSlip(emp){
   const drawsTotal=DB.draws.filter(d=>d.eid===emp.id&&Number(d.y)===DB.cycle.y&&Number(d.m)===DB.cycle.m).reduce((s,d)=>s+Number(d.am||0),0);const gross=basic+allow+otVal,deduct=insEmp+pen+advInst+drawsTotal;
   const rawNet=Math.max(0,gross-deduct);
   const net=roundNetSalary(rawNet);
-  return{basic,allow,allowInCalc,allowOutCalc,otVal,otHrs:totalOt,otDetails,gross,insEmp,absPen,unAuthPen,unAuthDays,latePen,pen,advInst,drawsTotal,deduct,net,rawNet};}
+  return{basic,allow,allowInCalc,allowOutCalc,otVal,otHrs:totalOt,otDetails,gross,insEmp,absPen,unAuthPen,unAuthDays,latePen,lateCount:lateRecs.length,pen,advInst,drawsTotal,deduct,net,rawNet};}
 
 // ===== تقريب صافي المرتب حسب القاعدة المختارة في الإعدادات =====
 // none: بدون تقريب | r50_100: العشرات 1-50 → لأقرب 50 | العشرات 51-99 → لأقرب 100
@@ -2603,7 +2630,13 @@ function saveEmp(){
 function editEmp(id){
   const e=DB.emp.find(x=>x.id===id);if(!e)return;document.getElementById('ef-id').value=e.id;['nm','cd','dp','ttl','bs','al','ph','jn','tp','ot'].forEach(k=>{const el=document.getElementById('ef-'+k);if(el)el.value=e[k]||''});document.getElementById('ef-in').value=e.ins||'مؤمَّن عليه';const insAmtEd=document.getElementById('ef-ins-amt');if(insAmtEd)insAmtEd.value=e.insAmt||'';const rdEl=document.getElementById('ef-rest-day');if(rdEl)rdEl.value=e.restDay??'';const lbEl=document.getElementById('ef-leave-bal');if(lbEl)lbEl.value=e.leaveBal||30;
   // تحميل ميعاد الحضور
-  const wtEl=document.getElementById('ef-workTime');if(wtEl){ wtEl.value=e.workTime||''; wtEl.dispatchEvent(new Event('change')); }// تحميل البدلات
+  const wtEl=document.getElementById('ef-workTime');if(wtEl){ wtEl.value=e.workTime||''; wtEl.dispatchEvent(new Event('change')); }
+  // تحميل إعدادات التأخير (كانت مفقودة — الحقول كانت بتتحفظ لكن ما بترجعش تظهر عند فتح الكارت تاني)
+  const lateExCb2=document.getElementById('ef-late-ex');
+  if(lateExCb2){ lateExCb2.checked=!!e.lateEx; lateExCb2.dispatchEvent(new Event('change')); }
+  const lateGraceEl=document.getElementById('ef-late-grace');if(lateGraceEl) lateGraceEl.value=e.lateGrace||'';
+  const lateExemptCb=document.getElementById('ef-late-exempt');if(lateExemptCb) lateExemptCb.checked=!!e.lateExempt;
+  // تحميل البدلات
   loadAllowancesFromEmp(e);// تحميل المسمى
   const tsel=document.getElementById('ef-ttl-select');if(tsel){
     const knownTitles=['شيف شرقى','مساعد شيف شرقى','شيف عمومى شرقى','شيف حلويات غربى','مساعد شيف غربى','شيف عمومى غربى','شيف مخبوزات','شيف مساعد مخبوزات','سائق','مندوب مبيعات','محاسب','مدير مالى','مدير مبيعات','مراقب جوده','شيف','مساعد شيف','مدير اداره','نائب مدير','مدير تنفيذى','مدير تسويق','امين مخزن','مساعد امين مخزن'];if(knownTitles.includes(e.ttl)){tsel.value=e.ttl;document.getElementById('ef-ttl').style.display='none';document.getElementById('ef-ttl').value=e.ttl;}
@@ -2617,7 +2650,16 @@ function editEmp(id){
   }
   document.getElementById('emp-mo-title').textContent='تعديل بيانات الموظف';document.getElementById('emp-mo').classList.add('open');closeDr();}
 function delEmp(id){
-  const e=DB.emp.find(x=>x.id===id);if(!e||!confirm(`حذف "${e.nm}"؟`))return;DB.emp=DB.emp.filter(x=>x.id!==id);sv('emp',DB.emp);toast('تم الحذف','success');renderEmp();renderDash();}
+  const e=DB.emp.find(x=>x.id===id);if(!e)return;
+  const activeLoans = DB.adv.filter(a=>a.eid===id&&a.status==='نشط');
+  let msg = `حذف "${e.nm}"؟`;
+  if(activeLoans.length){
+    const rem = activeLoans.reduce((s,a)=>s+Number(a.rem||0),0);
+    msg += `\n\n⚠️ تنبيه: عنده ${activeLoans.length} سلفة نشطة برصيد متبقٍ ${fc(rem)} ج.م — هتفضل ظاهرة في السلف حتى بعد الحذف (سجلات الحضور والمرتبات القديمة بتفضل محفوظة دايمًا).`;
+  }
+  if(!confirm(msg))return;
+  DB.emp=DB.emp.filter(x=>x.id!==id);sv('emp',DB.emp);toast('تم الحذف','success');renderEmp();renderDash();
+}
 let curDrId=null;function openDr(id){
   try{
   const e=DB.emp.find(x=>x.id===id);
@@ -2658,10 +2700,45 @@ function switchTab(t){
     filterPay();
   }
 }
+
+// ===== حالة صرف المرتب — سجل مستقل لكل موظف/شهر (مش خاصية دائمة على الموظف) =====
+function getPayStatus(eid){
+  const rec = DB.payDisburse.find(p=>p.eid===eid&&p.y===DB.cycle.y&&p.m===DB.cycle.m);
+  return rec ? rec.status : 'لم يُصرف';
+}
+
+function setPayStatus(eid, status){
+  const session = getSession();
+  if(!session || !(session.role==='admin' || session.perms?.payroll)){
+    toast('ليس لديك صلاحية','error'); return;
+  }
+  const idx = DB.payDisburse.findIndex(p=>p.eid===eid&&p.y===DB.cycle.y&&p.m===DB.cycle.m);
+  const rec = {
+    id: idx>=0 ? DB.payDisburse[idx].id : uid(),
+    eid, y:DB.cycle.y, m:DB.cycle.m, status,
+    updatedBy: session.name, updatedAt: new Date().toISOString()
+  };
+  if(idx>=0) DB.payDisburse[idx]=rec; else DB.payDisburse.push(rec);
+  sv('payDisburse', DB.payDisburse);
+  const emp = DB.emp.find(e=>e.id===eid);
+  toast(`✅ ${emp?.nm||''} — ${status}`,'success');
+  filterPay();
+}
+
+// ===== تبديل سريع: لم يُصرف → قيد التحويل → صرف → لم يُصرف (بالضغط على الشارة) =====
+function cyclePayStatus(eid){
+  const cur = getPayStatus(eid);
+  const next = cur==='لم يُصرف' ? 'قيد' : cur==='قيد' ? 'صرف' : 'لم يُصرف';
+  setPayStatus(eid, next);
+}
+
 function filterPay(){
   const q=(document.getElementById('p-q')?.value||'').toLowerCase();const act=DB.emp.filter(e=>e.st==='نشط');const fil=act.filter(e=>!q||(e.nm||'').toLowerCase().includes(q)||(e.cd||'').toLowerCase().includes(q));const tbody=document.getElementById('p-body'),tfoot=document.getElementById('p-foot');if(!fil.length){tbody.innerHTML='<tr><td colspan="12" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">receipt_long</span>أضف موظفين</td></tr>';tfoot.innerHTML='';return}
   let tB=0,tE=0,tO=0,tG=0,tP=0,tA=0,tI=0,tD=0,tN=0,tDr=0;tbody.innerHTML=fil.map(e=>{
-    const p=calcSlip(e);tB+=p.basic;tE+=p.allow;tO+=p.otVal;tG+=p.gross;tP+=p.pen;tA+=p.advInst;tI+=p.insEmp;tD+=p.deduct;tDr+=(p.drawsTotal||0);tN+=p.net;if(payTab!=='all')return'';const ini=(e.nm||'?').trim().split(' ').map(w=>w[0]).slice(0,2).join('');return`<tr>
+    const p=calcSlip(e);tB+=p.basic;tE+=p.allow;tO+=p.otVal;tG+=p.gross;tP+=p.pen;tA+=p.advInst;tI+=p.insEmp;tD+=p.deduct;tDr+=(p.drawsTotal||0);tN+=p.net;const _ps=getPayStatus(e.id);
+    if(payTab==='paid' && _ps!=='صرف') return '';
+    if(payTab==='pending' && _ps!=='قيد') return '';
+    if(payTab==='unpaid' && _ps!=='لم يُصرف') return '';const ini=(e.nm||'?').trim().split(' ').map(w=>w[0]).slice(0,2).join('');return`<tr>
       <td><div style="display:flex;align-items:center;gap:8px"><div style="width:29px;height:29px;border-radius:50%;background:linear-gradient(135deg,#0f2057,#0ea5a0);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;flex-shrink:0">${ini}</div><div><div style="font-size:12.5px;font-weight:700">${e.nm}</div><div style="font-size:10.5px;color:#94a3b8">${e.cd||'—'} • ${e.dp||''}</div></div></div></td>
       <td style="text-align:left;font-weight:700">${fc(p.basic)}</td>
       <td style="text-align:left">${fc(p.allow)}${p.allowOutCalc>0?`<br/><span style="font-size:10px;color:#d97706" title="يشمل منحة خارجية ${fc(p.allowOutCalc)} ج.م لا تدخل في الحساب">⚡ ${fc(p.allowOutCalc)} خارجي</span>`:''}</td>
@@ -2673,7 +2750,7 @@ function filterPay(){
       <td style="text-align:left;color:#e03131;font-weight:700">${p.drawsTotal>0?fc(p.drawsTotal):'—'}</td>
       <td style="text-align:left;background:#fff0f0;font-weight:700;color:#e03131">${fc(p.deduct)}</td>
       <td style="text-align:left;background:#f0fdf4;font-weight:800;color:#16a34a;font-size:13.5px">${fc(p.net)}</td>
-      <td style="text-align:center"><span class="bd" style="${e.payStatus==='صرف'?'background:#dcfce7;color:#16a34a':e.payStatus==='قيد'?'background:#fef3c7;color:#d97706':'background:#f0f4fc;color:#94a3b8'}">${e.payStatus||'لم يُصرف'}</span></td>
+      <td style="text-align:center"><span class="bd" onclick="cyclePayStatus('${e.id}')" style="cursor:pointer;${getPayStatus(e.id)==='صرف'?'background:#dcfce7;color:#16a34a':getPayStatus(e.id)==='قيد'?'background:#fef3c7;color:#d97706':'background:#f0f4fc;color:#94a3b8'}" title="اضغط لتغيير حالة الصرف">${getPayStatus(e.id)}</span></td>
       <td style="text-align:center"><div style="display:flex;gap:3px;justify-content:center">
         <button class="btn bg bi bs" onclick="openPaySlip('${e.id}')" title="تفاصيل المرتب"><span class="ms ms-sm">visibility</span></button>
       <button class="btn bg bi bs" onclick="openPayrollMonthEdit('${e.id}')" title="تعديل أيام الشهر" style="background:#eef2ff;color:#0f2057"><span class="ms ms-sm">edit_calendar</span></button>
@@ -3148,7 +3225,7 @@ function updateSingleRent(id,newVal,pct,manual){
 function archiveCurrentMonth(){
   const snapshot=DB.rent.filter(r=>r.status==='نشط').map(r=>({...r}));if(!snapshot.length){toast('لا توجد عقود للأرشفة','warning');return}
   const arc={id:uid(),y:DB.cycle.y,m:DB.cycle.m,label:`${MAR[DB.cycle.m-1]} ${DB.cycle.y}`,total:snapshot.reduce((s,r)=>s+Number(r.curr||r.base),0),count:snapshot.length,contracts:snapshot,archivedAt:new Date().toISOString()};// منع التكرار لنفس الشهر
-  const exists=DB.rentArchive.findIndex(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);if(exists>=0)DB.rentArchive[exists]=arc;else DB.rentArchive.push(arc);sv('rent_arc',DB.rentArchive);toast(`تم أرشفة ${MAR[DB.cycle.m-1]} ${DB.cycle.y} (${snapshot.length} عقد)`,'success');}
+  const exists=DB.rentArchive.findIndex(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);if(exists>=0)DB.rentArchive[exists]=arc;else DB.rentArchive.push(arc);sv('rentArchive',DB.rentArchive);toast(`تم أرشفة ${MAR[DB.cycle.m-1]} ${DB.cycle.y} (${snapshot.length} عقد)`,'success');}
 
 function openArchiveModal(){
   // fill year filter
@@ -3184,7 +3261,7 @@ function renderArchive(){
 function toggleArcDetail(id){const el=document.getElementById(id);if(el)el.style.display=el.style.display==='none'?'block':'none'}
 
 function delArc(id){
-  if(!confirm('حذف هذا الأرشيف؟'))return;DB.rentArchive=DB.rentArchive.filter(a=>a.id!==id);sv('rent_arc',DB.rentArchive);renderArchive();toast('تم حذف الأرشيف','success');}
+  if(!confirm('حذف هذا الأرشيف؟'))return;DB.rentArchive=DB.rentArchive.filter(a=>a.id!==id);sv('rentArchive',DB.rentArchive);renderArchive();toast('تم حذف الأرشيف','success');}
 
 function renderRent(){
   const act=DB.rent.filter(r=>r.status==='نشط');const total=act.reduce((s,r)=>s+Number(r.curr||r.base||0),0);const avgPct=act.length?act.reduce((s,r)=>s+Number(r.pct||0),0)/act.length:0;const now=new Date();const renewSoon=act.filter(r=>{if(!r.endDate)return false;const diff=(new Date(r.endDate)-now)/(1000*60*60*24);return diff>=0&&diff<=60});const annual=total*12;document.getElementById('r-total').textContent=fc(total);bar('r-total-b',total>0?75:0);document.getElementById('r-cnt').textContent=act.length;document.getElementById('r-avg-pct').textContent=(avgPct||0).toFixed(1)+'%';document.getElementById('r-renew').textContent=renewSoon.length;document.getElementById('r-annual').textContent=fc(annual);bar('r-annual-b',annual>0?60:0);document.getElementById('r-year-lbl').textContent=DB.cycle.y;document.getElementById('rent-cycle-lbl').textContent=`${MAR[DB.cycle.m-1]} ${DB.cycle.y}`;const q=(document.getElementById('r-q')?.value||'').toLowerCase();const fil=DB.rent.filter(r=>!q||(r.unit||'').toLowerCase().includes(q)||(r.tenant||'').toLowerCase().includes(q));const tbody=document.getElementById('r-body'),tfoot=document.getElementById('r-foot');if(!fil.length){tbody.innerHTML='<tr><td colspan="11" style="text-align:center;padding:40px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">add_home</span>ابدأ بإضافة أول عقد إيجار</td></tr>';tfoot.innerHTML='';return}
@@ -3864,7 +3941,8 @@ function printReceipts(){
   const style = document.createElement('style');style.id = 'print-style-temp';style.textContent = `
     @media print {
       body * { visibility:hidden !important;}
-      #print-section, #print-section * { visibility:visible !important;}
+      #print-section, #print-section *,
+      #payslip-print-section, #payslip-print-section * { visibility:visible !important;}
       #receipts-preview { position:fixed;top:0;right:0;width:100%;}
       .receipt-card { page-break-after:always;border:none !important;border-radius:0 !important;}
       #sb-toggle, header { display:none !important;}
@@ -5315,40 +5393,24 @@ function startServerMonitor(){
   window.serverCheckInterval = setInterval(checkServerStatus, 60000);
 }
 
-async function autoSyncOnOpen(){
-  // نتحقق من آخر مزامنة
-  const lastSync = localStorage.getItem('zz_last_sync');
-  const today = new Date().toDateString();
-
-  // لو مزامنة اليوم اتعملت — لا تعمل تاني (تلقائيًا بس، الضغط اليدوي بيتخطى ده)
-  if(lastSync === today) return;
-
-  // نتحقق من السيرفر بصمت
+// ===== المنطق الأساسي لجلب ودمج بيانات البصمة (يُستخدم في المزامنة اليومية واللحظية معًا) =====
+async function performFingerprintSync(){
+  const result = {serverOk:false, newEmps:0, added:0, updated:0, preserved:0};
   try {
-    const res = await fetch('http://localhost:7788/ping', {
-      signal: AbortSignal.timeout(2000)
-    });
+    const res = await fetch('http://localhost:7788/ping', {signal: AbortSignal.timeout(2000)});
     const data = await res.json();
     updateServerIndicator(true);
-    if(data.status !== 'ok'){updateServerIndicator(false);return;}
+    if(data.status !== 'ok'){ updateServerIndicator(false); return result; }
+    result.serverOk = true;
 
-    // السيرفر شغال — نعمل مزامنة تلقائية
-    console.log('🔄 مزامنة تلقائية...');
-
-    // نجيب الشهر الحالي
     const syncRes = await fetch(
       `http://localhost:7788/fetch?year=${DB.cycle.y}&month=${DB.cycle.m}`,
       {signal: AbortSignal.timeout(30000)}
     );
     const syncData = await syncRes.json();
-
-    if(syncData.status !== 'success' || !syncData.records?.length) return;
-
-    let added = 0, updated = 0, preserved = 0, newEmps = 0;
+    if(syncData.status !== 'success' || !syncData.records?.length) return result;
 
     // ===== 1) استيراد أي موظف جديد موجود على جهاز البصمة وغير موجود في النظام =====
-    // (نفس منطق المطابقة المرنة المستخدم في باقي أماكن الاستيراد — بدون التأثير
-    //  على أي موظف موجود بالفعل، وبدون اسم فاضي)
     const empMap={};
     syncData.records.forEach(r=>{ if(r.empCode && !empMap[r.empCode]) empMap[r.empCode]=r.empName; });
     Object.entries(empMap).forEach(([code,name])=>{
@@ -5357,10 +5419,10 @@ async function autoSyncOnOpen(){
       if(!exists){
         const safeName = (name && String(name).trim()) ? String(name).trim() : ('موظف '+codeN);
         DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل',ins:'غير مشمول',insAmt:0,st:'نشط'});
-        newEmps++;
+        result.newEmps++;
       }
     });
-    if(newEmps>0){ sv('emp',DB.emp); renderEmp(); }
+    if(result.newEmps>0){ sv('emp',DB.emp); renderEmp(); }
 
     // ===== 2) تحديث/إضافة الحضور — مع الحفاظ على أي يوم اتعدّل يدويًا =====
     syncData.records.forEach(r=>{
@@ -5371,20 +5433,9 @@ async function autoSyncOnOpen(){
 
       if(existIdx>=0){
         const old = DB.att[existIdx];
-        // لو اليوم اتعدّل أو اتحوّل يدويًا (من كشف المرتبات أو تعديل الحضور)
-        // منسيبوش المزامنة التلقائية تلغي التعديل
-        if(old.convertedBy || old.editedBy){
-          preserved++;
-          return;
-        }
-        // تحديث سجل تلقائي عادي بأحدث بيانات من الجهاز
-        DB.att[existIdx] = {
-          ...old,
-          ti:r.timeIn, to:r.timeOut,
-          ot:Number(r.ot||0),
-          st:r.status||'حضور', nt:'مزامنة تلقائية'
-        };
-        updated++;
+        if(old.convertedBy || old.editedBy){ result.preserved++; return; }
+        DB.att[existIdx] = { ...old, ti:r.timeIn, to:r.timeOut, ot:Number(r.ot||0), st:r.status||'حضور', nt:'مزامنة تلقائية' };
+        result.updated++;
       } else {
         DB.att.push({
           id: r.id||uid(), eid,
@@ -5393,29 +5444,57 @@ async function autoSyncOnOpen(){
           ot:Number(r.ot||0), ott:'hour_normal',
           st:r.status||'حضور', nt:'مزامنة تلقائية', isLate:false
         });
-        added++;
+        result.added++;
       }
     });
 
-    if(added>0 || updated>0){
+    if(result.added>0 || result.updated>0){
       sv('att',DB.att);
-      renderDash();
+      renderDash(); renderAtt();
     }
-
-    localStorage.setItem('zz_last_sync', today);
-    localStorage.setItem('zz_last_sync_count', added);
-
-    // رسالة توضح فعليًا إيه اللي اتعمل
-    const parts = [];
-    if(newEmps)  parts.push(`👤 ${newEmps} موظف جديد`);
-    if(added)    parts.push(`➕ ${added} حضور جديد`);
-    if(updated)  parts.push(`🔄 ${updated} تحديث`);
-    if(preserved) parts.push(`🔒 ${preserved} يوم معدّل محفوظ كما هو`);
-    if(parts.length) toast('البصمة: '+parts.join(' — '),'success');
-
   } catch(e) {
-    // السيرفر مش شغال — لا تعمل حاجة بصمت
-    // server not reachable — skip;
+    // السيرفر مش شغال أو فيه مشكلة اتصال — تجاهل بصمت (السحب اللحظي بيحاول تاني بعد شوية)
+  }
+  return result;
+}
+
+async function autoSyncOnOpen(){
+  const lastSync = localStorage.getItem('zz_last_sync');
+  const today = new Date().toDateString();
+  if(lastSync === today) return;
+
+  const r = await performFingerprintSync();
+  if(!r.serverOk) return;
+
+  localStorage.setItem('zz_last_sync', today);
+  localStorage.setItem('zz_last_sync_count', r.added);
+
+  const parts = [];
+  if(r.newEmps)  parts.push(`👤 ${r.newEmps} موظف جديد`);
+  if(r.added)    parts.push(`➕ ${r.added} حضور جديد`);
+  if(r.updated)  parts.push(`🔄 ${r.updated} تحديث`);
+  if(r.preserved) parts.push(`🔒 ${r.preserved} يوم معدّل محفوظ كما هو`);
+  if(parts.length) toast('البصمة: '+parts.join(' — '),'success');
+}
+
+// ===== السحب اللحظي — بيشتغل تلقائيًا كل ٤٥ ثانية طول ما البرنامج مفتوح =====
+// بيشتغل بصمت تمامًا لو مفيش سيرفر بصمة على الجهاز ده (زي أي جهاز تاني بعيد عن الشبكة المحلية)
+// ولو لقى حضور/انصراف جديد أو موظف جديد، بيحفظه فورًا وبيترفع لفايربيز فيظهر على كل الأجهزة
+let _livePollBusy = false;
+async function livePollFingerprint(){
+  if(_livePollBusy) return; // منمنعش تراكم طلبات لو سابقة لسه شغالة
+  _livePollBusy = true;
+  try{
+    const r = await performFingerprintSync();
+    if(r.serverOk && (r.newEmps>0 || r.added>0 || r.updated>0)){
+      const parts=[];
+      if(r.newEmps) parts.push(`👤 ${r.newEmps} موظف جديد`);
+      if(r.added)   parts.push(`➕ ${r.added} حضور جديد`);
+      if(r.updated) parts.push(`🔄 ${r.updated} تحديث`);
+      toast('البصمة (لحظي): '+parts.join(' — '),'success');
+    }
+  } finally {
+    _livePollBusy = false;
   }
 }
 
@@ -5473,7 +5552,7 @@ function openPaySlip(eid){
   const absRecs = DB.att.filter(a=>a.eid===eid&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m);
   const absAuth = absRecs.filter(a=>a.st==='غياب بإذن').length;
   const absUnauth = absRecs.filter(a=>a.st==='غياب بدون إذن').length;
-  const lateRecs = absRecs.filter(a=>Number(a.lateMin||0)>gr('lt_gr',15));
+  const lateRecs = { length: p.lateCount||0 }; // نفس الرقم بالظبط اللي calcSlip استخدمه في الخصم (بيراعي السماح الخاص والاستبعاد الكامل لكل موظف)
   const dailyB = (Number(e.bs)||0)/30;
 
   // تفاصيل السلف
@@ -5488,7 +5567,7 @@ function openPaySlip(eid){
 
   const html = `
   <div class="mo open" id="payslip-detail-mo" style="display:flex;z-index:200">
-    <div class="mb" style="max-width:560px;max-height:90vh;overflow-y:auto;padding:0">
+    <div class="mb" id="payslip-print-section" style="max-width:560px;max-height:90vh;overflow-y:auto;padding:0">
 
       <!-- Header -->
       <div style="background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:20px 22px;display:flex;align-items:center;gap:13px;position:sticky;top:0;z-index:10">
@@ -5611,6 +5690,7 @@ function openPaySlip(eid){
         <!-- أزرار -->
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
           <button class="btn bg" onclick="document.getElementById('payslip-detail-mo').remove()">إغلاق</button>
+          <button class="btn bg" onclick="window.print()"><span class="ms ms-sm">print</span>طباعة</button>
           <button class="btn bn" onclick="sendWA1('${eid}')"><span class="ms ms-sm" style="color:#25d366">chat</span>إرسال WhatsApp</button>
         </div>
       </div>
@@ -7583,6 +7663,10 @@ function enterApp(user){
   setTimeout(()=>{
     startServerMonitor();
     autoSyncOnOpen();
+    // السحب اللحظي — كل 45 ثانية طول ما البرنامج مفتوح على الجهاز المتصل بالبصمة
+    // (بيتجاهل نفسه بصمت على أي جهاز تاني مالوش وصول لشبكة البصمة المحلية)
+    if(window._livePollInterval) clearInterval(window._livePollInterval);
+    window._livePollInterval = setInterval(livePollFingerprint, 45000);
   }, 800);
 }
 
