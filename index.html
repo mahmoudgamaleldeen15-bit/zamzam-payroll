@@ -5877,11 +5877,10 @@ async function checkServerStatus(){
 }
 
 function startServerMonitor(){
-  // فحص فوري
+  // فحص فوري وقت فتح البرنامج بس — الفحص الدوري بعد كده مصدره الوحيد
+  // livePollFingerprint (كل 45 ثانية)، عشان منعملش مسارين مستقلين
+  // بيتزاحموا مع بعض ويعملوا تذبذب في المؤشر
   checkServerStatus();
-  // فحص كل 60 ثانية بصمت
-  if(window.serverCheckInterval) clearInterval(window.serverCheckInterval);
-  window.serverCheckInterval = setInterval(checkServerStatus, 60000);
 
   // فحص دوري لصحة اتصال فايربيز نفسه — كل 30 ثانية، بيحاول يرجع يتصل
   // تلقائيًا لو انقطع لأي سبب (حتى لو النت شغال طول الوقت)
@@ -5908,6 +5907,15 @@ async function performFingerprintSync(){
       {signal: AbortSignal.timeout(30000)}
     );
     const syncData = await syncRes.json();
+    // مهم: لو السيرفر رد بنجاح لكن فشل فعليًا يوصل لجهاز البصمة (status='error')،
+    // ده اتصال حقيقي فاشل بالبصمة نفسها — لازم المؤشر يعكس ده صح، مش يفضل
+    // "متصل" غلط لمجرد إن سيرفر البايثون نفسه شغال
+    if(syncData.status === 'error'){
+      window._fpHasDirectConn = false;
+      updateServerIndicator(false);
+      notifyFpStatusIfChanged(false);
+      return result;
+    }
     if(syncData.status !== 'success' || !syncData.records?.length) return result;
 
     // نسجّل آخر تاريخ فعليًا وصلت له بيانات من البصمة (مش تاريخ تشغيل البرنامج) —
