@@ -85,7 +85,7 @@ class ZamzamHandler(BaseHTTPRequestHandler):
     def get_device_info(self):
         try:
             from zk import ZK
-            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=8, password=PASSWORD)
+            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=8, password=PASSWORD, ommit_ping=True)
             conn = zk.connect()
             info = {
                 'status': 'connected',
@@ -105,7 +105,7 @@ class ZamzamHandler(BaseHTTPRequestHandler):
             from datetime import datetime
 
             print(f"  🔌 الاتصال بـ {DEVICE_IP}:{DEVICE_PORT}...")
-            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=10, password=PASSWORD)
+            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=10, password=PASSWORD, ommit_ping=True)
             conn = zk.connect()
             print(f"  ✅ متصل!")
 
