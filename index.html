@@ -4666,12 +4666,12 @@ function saveLeave(autoPrint=false){
     const existIdx=DB.att.findIndex(a=>a.eid===eid&&a.dt===dtStr);
     if(existIdx<0){
       // مفيش سجل خالص لليوم ده — ننشئ واحد جديد بحالة إجازة اعتيادية
-      DB.att.push({id:uid(),eid,dt:dtStr,y:dt.getFullYear(),m:dt.getMonth()+1,d:dt.getDate(),ti:'',to:'',ot:0,ott:'',st:'إجازة اعتيادية',nt:'إجازة اعتيادية',isLate:false});
+      DB.att.push({id:uid(),eid,dt:dtStr,y:dt.getFullYear(),m:dt.getMonth()+1,d:dt.getDate(),ti:'',to:'',ot:0,ott:'',st:'إجازة اعتيادية',nt:'إجازة اعتيادية',isLate:false,editedBy:'leave-request'});
     } else if(DB.att[existIdx].st!=='إجازة اعتيادية'){
       // فيه سجل موجود بحالة تانية (حضور، غياب، إلخ) — لازم نحوّله لإجازة اعتيادية
       // برضه، عشان سجل الإجازة وسجل الحضور يفضلوا متطابقين دايمًا ومايحصلش
       // تعارض زي إن الإجازة تتسجل من غير ما ينعكس ده على تاب الحضور
-      DB.att[existIdx] = {...DB.att[existIdx], ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'إجازة اعتيادية'};
+      DB.att[existIdx] = {...DB.att[existIdx], ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'إجازة اعتيادية', editedBy:'leave-request'};
     }
   }
   sv('att',DB.att);document.getElementById('lv-mo')?.remove();toast(`تم تسجيل ${days} يوم إجازة لـ ${emp?.nm}`,'success');renderLeave();
@@ -5950,7 +5950,11 @@ async function performFingerprintSync(){
 
       if(existIdx>=0){
         const old = DB.att[existIdx];
-        if(old.convertedBy || old.editedBy){ result.preserved++; return; }
+        // حماية مزدوجة: أي علامة تعديل يدوي، أو أي حالة مهمة تم تحديدها
+        // عمدًا (إجازة، راحة، بدل راحة) — مايتكتبش فوقها تلقائيًا حتى لو
+        // نسي أي كود تاني يحط علامة الحماية صراحةً
+        const PROTECTED_STATUSES = ['إجازة اعتيادية','راحة أسبوعية','يوم بدل راحة','غياب بإذن','غياب بدون إذن'];
+        if(old.convertedBy || old.editedBy || PROTECTED_STATUSES.includes(old.st)){ result.preserved++; return; }
         DB.att[existIdx] = { ...old, ti:r.timeIn, to:r.timeOut, ot:Number(r.ot||0), st:r.status||'حضور', nt:'مزامنة تلقائية' };
         result.updated++;
       } else {
