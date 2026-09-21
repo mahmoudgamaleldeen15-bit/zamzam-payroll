@@ -87,14 +87,19 @@ class ZamzamHandler(BaseHTTPRequestHandler):
             from zk import ZK
             zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=8, password=PASSWORD, ommit_ping=True)
             conn = zk.connect()
-            info = {
-                'status': 'connected',
-                'name':   conn.get_device_name(),
-                'serial': conn.get_serialnumber(),
-                'time':   str(conn.get_time()),
-                'ip':     DEVICE_IP,
-            }
-            conn.disconnect()
+            try:
+                info = {
+                    'status': 'connected',
+                    'name':   conn.get_device_name(),
+                    'serial': conn.get_serialnumber(),
+                    'time':   str(conn.get_time()),
+                    'ip':     DEVICE_IP,
+                }
+            finally:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
             return info
         except Exception as e:
             return {'status': 'error', 'message': str(e)}
@@ -109,15 +114,23 @@ class ZamzamHandler(BaseHTTPRequestHandler):
             conn = zk.connect()
             print(f"  ✅ متصل!")
 
-            # جلب الموظفين
-            conn.disable_device()
-            users = conn.get_users()
-            user_map = {str(u.user_id): u.name or f'موظف {u.user_id}' for u in users}
-
-            # جلب الحضور
-            records = conn.get_attendance()
-            conn.enable_device()
-            conn.disconnect()
+            # لازم الجهاز يترجع يتفتح والاتصال يتقفل دايمًا، حتى لو حصل
+            # أي خطأ في النص — وإلا الجهاز يفضل "مقفول عن التسجيل" والاتصال
+            # القديم يفضل عالق، وأي محاولة اتصال جديدة تفشل بسببه
+            try:
+                conn.disable_device()
+                users = conn.get_users()
+                user_map = {str(u.user_id): u.name or f'موظف {u.user_id}' for u in users}
+                records = conn.get_attendance()
+            finally:
+                try:
+                    conn.enable_device()
+                except Exception as e2:
+                    print(f"  ⚠️ تعذّر إعادة تفعيل الجهاز: {e2}")
+                try:
+                    conn.disconnect()
+                except Exception as e3:
+                    print(f"  ⚠️ تعذّر قفل الاتصال بأمان: {e3}")
 
             # فلترة الشهر المطلوب
             from_date = datetime(year, month, 1)
