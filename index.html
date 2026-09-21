@@ -5019,8 +5019,9 @@ async function startFetch(){
     }
 
     setProgress(90,'💾 جاري الحفظ...');// استيراد الحضور
+    const notFound=[]; // أكواد من الجهاز مالهاش موظف مطابق في النظام
     records.forEach(r=>{
-      const emp=DB.emp.find(e=>e.cd===r.empCode);if(!emp)return;const eid=emp.id;// منطق المضاء المزدوج
+      const emp=DB.emp.find(e=>e.cd===r.empCode);if(!emp){if(r.empCode&&!notFound.includes(r.empCode))notFound.push(r.empCode);return;}const eid=emp.id;// منطق المضاء المزدوج
       const existFetch=DB.att.find(a=>a.eid===eid&&a.dt===r.date);
       if(existFetch){
         if(skipDup){skippedAtt++;return;}
