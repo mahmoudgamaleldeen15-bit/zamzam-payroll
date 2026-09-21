@@ -832,9 +832,10 @@ body.auth-mode {
   <div style="display:flex;gap:9px;margin-bottom:13px;flex-wrap:wrap">
     <div style="position:relative;flex:1;min-width:200px"><span class="ms ms-sm" style="position:absolute;right:11px;top:50%;transform:translateY(-50%);color:#94a3b8">search</span><input class="fi" id="ch-q" placeholder="بحث بالاسم أو الكود..." style="padding-right:36px" oninput="renderChr()"/></div>
     <select class="fi" id="ch-tf" style="width:auto;min-width:155px" onchange="renderChr()"><option value="">كل الأنواع</option><option>كفالة معيشية</option><option>علاج ودواء</option><option>طارئة</option><option>شهرية متكررة</option></select>
+    <select class="fi" id="ch-recv-f" style="width:auto;min-width:155px" onchange="renderChr()"><option value="">الكل (استلم/لم يستلم)</option><option value="استلم">استلم فقط</option><option value="لم يستلم">لم يستلم فقط</option></select>
   </div>
   <div style="background:#fff;border-radius:16px;border:1px solid #eaeffa;overflow:hidden"><div style="overflow-x:auto">
-    <table class="dt"><thead><tr><th>كود</th><th>المستفيد</th><th>الاتصال</th><th style="text-align:left">المبلغ</th><th>النوع</th><th style="text-align:center">آخر صرف</th><th style="text-align:center">الحالة</th><th>ملاحظات</th><th class="np">—</th></tr></thead>
+    <table class="dt"><thead><tr><th>كود</th><th>المستفيد</th><th>الاتصال</th><th style="text-align:left">المبلغ</th><th>النوع</th><th style="text-align:center">آخر صرف</th><th style="text-align:center">الحالة</th><th style="text-align:center">الاستلام هذا الشهر</th><th>ملاحظات</th><th class="np">—</th></tr></thead>
     <tbody id="ch-body"><tr><td colspan="9" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px;color:#7c3aed">volunteer_activism</span>أضف أول حالة مستفيدة</td></tr></tbody></table>
   </div></div>
 </div>
@@ -1722,6 +1723,7 @@ const DB={
   archives:JSON.parse(localStorage.getItem('zz_archives')||'[]'),
   issues:JSON.parse(localStorage.getItem('zz_issues')||'[]'),
   payDisburse:JSON.parse(localStorage.getItem('zz_payDisburse')||'[]'),
+  charityRecv:JSON.parse(localStorage.getItem('zz_charityRecv')||'[]'),
 };const MAR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const PGS={dashboard:'لوحة التحكم',employees:'الموظفون',payroll:'كشف المرتبات',attendance:'الحضور والأوفرتايم',advances:'السلف والاستقطاعات',draws:'المسحوبات',rent:'الإيجارات الشهرية',formulas:'القواعد والإعدادات',charity:'وحدة الصدقات',reports:'مركز التقارير',leave:'الإجازات الاعتيادية',restdays:'الراحات الأسبوعية',loancheck:'استحقاق السلفة',archive:'الأرشيف',actiontracking:'متابعة الإجراءات'};// =====================================================
 // Firebase Hybrid Sync — زمزم Payroll
 // localStorage (primary) + Firebase (cloud backup/sync)
@@ -1738,7 +1740,7 @@ const FB_CONFIG = {
 };
 
 // الـ DB keys اللي بتتزامن
-const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives','issues','payDisburse'];
+const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives','issues','payDisburse','charityRecv'];
 
 let fbApp = null;
 let fbDB  = null;
@@ -2116,6 +2118,14 @@ async function fbAutoDownloadChanges(fbTs){
     // تحديث كل الصفحات — بغض النظر عن الصفحة المفتوحة حاليًا، عشان أي
     // تعديل من أي جهاز يظهر فورًا على كل الأجهزة التانية بدون ما
     // المستخدم يحتاج يتنقل بره الصفحة ويرجعلها يدويًا
+    // نحفظ فلاتر تاب الحضور (الموظف المختار، الشهر، من/إلى) قبل أي تحديث
+    // تلقائي — عشان التحديث اللحظي ميطلّعناش من الموظف اللي واقفين عليه
+    const _efP = document.getElementById('at-ef');
+    const _mfP = document.getElementById('at-mf');
+    const _fromP = document.getElementById('at-from');
+    const _toP = document.getElementById('at-to');
+    const _savedFilters = { ef:_efP?.value, mf:_mfP?.value, from:_fromP?.value, to:_toP?.value };
+
     if(typeof renderDash  === 'function') renderDash();
     if(typeof renderEmp   === 'function') renderEmp();
     if(typeof renderPay   === 'function') renderPay();
@@ -2130,6 +2140,14 @@ async function fbAutoDownloadChanges(fbTs){
     if(typeof renderArchivePage === 'function') renderArchivePage();
     if(typeof renderActionTracking === 'function') renderActionTracking();
     if(typeof updateNotifDot === 'function') updateNotifDot();
+
+    // نستعيد فلاتر تاب الحضور بالقوة لو أي حاجة رجّعتها لغير ما كانت عليه
+    let _filtersChanged = false;
+    if(_efP && _savedFilters.ef!==undefined && _efP.value!==_savedFilters.ef){ _efP.value=_savedFilters.ef; _filtersChanged=true; }
+    if(_mfP && _savedFilters.mf!==undefined && _mfP.value!==_savedFilters.mf){ _mfP.value=_savedFilters.mf; _filtersChanged=true; }
+    if(_fromP && _savedFilters.from!==undefined && _fromP.value!==_savedFilters.from){ _fromP.value=_savedFilters.from; _filtersChanged=true; }
+    if(_toP && _savedFilters.to!==undefined && _toP.value!==_savedFilters.to){ _toP.value=_savedFilters.to; _filtersChanged=true; }
+    if(_filtersChanged && typeof renderAtt==='function') renderAtt();
 
     // إشعار بالتغييرات
     showSyncChangesNotification(changes, fbTs);
@@ -3482,10 +3500,38 @@ function saveChr(){
   const id=document.getElementById('cf-id').value;const nm=document.getElementById('cf-nm').value.trim();if(!nm){toast('الاسم مطلوب','error');return}
   const am=Number(document.getElementById('cf-am').value);if(!am){toast('المبلغ مطلوب','error');return}
   const code='CH-'+String(1000+(DB.chr.length+1)).padStart(4,'0');const c={id:id||uid(),code:id?DB.chr.find(x=>x.id===id)?.code||code:code,nm,am,ph:document.getElementById('cf-ph').value,ad:document.getElementById('cf-ad').value,tp:document.getElementById('cf-tp').value,rc:document.getElementById('cf-rc').value,rl:document.getElementById('cf-rl').value,nt:document.getElementById('cf-nt').value,status:'نشطة',lastPay:new Date().toISOString().slice(0,10),y:DB.cycle.y,m:DB.cycle.m};if(id){const i=DB.chr.findIndex(x=>x.id===id);if(i>=0)DB.chr[i]=c}else DB.chr.push(c);sv('chr',DB.chr);document.getElementById('chr-mo').classList.remove('open');toast(`تم تسجيل ${nm}`,'success');renderChr();}
+
+// ===== حالة استلام الصدقة — سجل مستقل لكل مستفيد/شهر (زي حالة صرف المرتب بالظبط) =====
+function getCharityStatus(chrId){
+  const rec = DB.charityRecv.find(r=>r.chrId===chrId&&r.y===DB.cycle.y&&r.m===DB.cycle.m);
+  return rec ? rec.status : 'لم يستلم';
+}
+
+function setCharityStatus(chrId, status){
+  const session = getSession();
+  if(!session || !(session.role==='admin' || session.perms?.charity)){
+    toast('ليس لديك صلاحية','error'); return;
+  }
+  const idx = DB.charityRecv.findIndex(r=>r.chrId===chrId&&r.y===DB.cycle.y&&r.m===DB.cycle.m);
+  const rec = {
+    id: idx>=0 ? DB.charityRecv[idx].id : uid(),
+    chrId, y:DB.cycle.y, m:DB.cycle.m, status,
+    updatedBy: session.name, updatedAt: new Date().toISOString()
+  };
+  if(idx>=0) DB.charityRecv[idx]=rec; else DB.charityRecv.push(rec);
+  sv('charityRecv', DB.charityRecv);
+  renderChr();
+}
+
+function cycleCharityStatus(chrId){
+  const cur = getCharityStatus(chrId);
+  setCharityStatus(chrId, cur==='لم يستلم' ? 'استلم' : 'لم يستلم');
+}
+
 function renderChr(){
-  const rec=DB.chr.filter(c=>c.rc==='شهرية متكررة');const mo=DB.chr.filter(c=>c.y===DB.cycle.y&&c.m===DB.cycle.m).reduce((s,c)=>s+Number(c.am||0),0);document.getElementById('ch-mo').textContent=fc(mo);bar('ch-mo-b',mo>0?70:0);document.getElementById('ch-cnt').textContent=DB.chr.length;document.getElementById('ch-rec').textContent=fc(rec.reduce((s,c)=>s+Number(c.am||0),0));const ann=DB.chr.reduce((s,c)=>s+Number(c.am||0),0);document.getElementById('ch-ann').textContent=fc(ann);bar('ch-ann-b',ann>0?60:0);const q=(document.getElementById('ch-q')?.value||'').toLowerCase();const tf=document.getElementById('ch-tf')?.value||'';const fil=DB.chr.filter(c=>(!q||(c.nm||'').toLowerCase().includes(q)||(c.code||'').toLowerCase().includes(q))&&(!tf||c.tp===tf));const tb=document.getElementById('ch-body');if(!fil.length){tb.innerHTML='<tr><td colspan="9" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px;color:#7c3aed">volunteer_activism</span>لا حالات</td></tr>';return}
+  const rec=DB.chr.filter(c=>c.rc==='شهرية متكررة');const mo=DB.chr.filter(c=>c.y===DB.cycle.y&&c.m===DB.cycle.m).reduce((s,c)=>s+Number(c.am||0),0);document.getElementById('ch-mo').textContent=fc(mo);bar('ch-mo-b',mo>0?70:0);document.getElementById('ch-cnt').textContent=DB.chr.length;document.getElementById('ch-rec').textContent=fc(rec.reduce((s,c)=>s+Number(c.am||0),0));const ann=DB.chr.reduce((s,c)=>s+Number(c.am||0),0);document.getElementById('ch-ann').textContent=fc(ann);bar('ch-ann-b',ann>0?60:0);const q=(document.getElementById('ch-q')?.value||'').toLowerCase();const tf=document.getElementById('ch-tf')?.value||'';const rf=document.getElementById('ch-recv-f')?.value||'';const fil=DB.chr.filter(c=>(!q||(c.nm||'').toLowerCase().includes(q)||(c.code||'').toLowerCase().includes(q))&&(!tf||c.tp===tf)&&(!rf||getCharityStatus(c.id)===rf));const tb=document.getElementById('ch-body');if(!fil.length){tb.innerHTML='<tr><td colspan="10" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px;color:#7c3aed">volunteer_activism</span>لا حالات</td></tr>';return}
   const tpBg={'كفالة معيشية':'#dcfce7|#16a34a','علاج ودواء':'#e0f2fe|#0369a1','طارئة':'#fef3c7|#d97706','شهرية متكررة':'#f0edff|#7c3aed'};tb.innerHTML=fil.map(c=>{
-    const[bg2,cl2]=(tpBg[c.tp]||'#f0f4fc|#4a5982').split('|');return`<tr><td style="font-weight:800;color:#5b21b6">${c.code}</td><td><div style="font-weight:700">${c.nm}</div><div style="font-size:10.5px;color:#94a3b8">${c.rl||'—'}</div></td><td><div style="font-size:12px" dir="ltr">${c.ph||'—'}</div></td><td style="text-align:left;font-weight:800;color:#5b21b6">${fc(c.am)} ج.م</td><td><span class="bd" style="background:${bg2};color:${cl2}">${c.tp}</span></td><td style="text-align:center;font-size:11.5px">${c.lastPay||'—'}</td><td style="text-align:center"><span class="bd" style="background:#dcfce7;color:#16a34a">${c.status}</span></td><td style="font-size:11.5px;color:#4a5982;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.nt||'—'}</td><td style="text-align:center"><div style="display:flex;justify-content:center;gap:3px"><button class="btn bg bi bs" onclick="editChr('${c.id}')"><span class="ms ms-sm">edit_note</span></button><button class="btn bd2 bi bs" onclick="delChr('${c.id}')"><span class="ms ms-sm">delete</span></button></div></td></tr>`;}).join('');}
+    const[bg2,cl2]=(tpBg[c.tp]||'#f0f4fc|#4a5982').split('|');return`<tr><td style="font-weight:800;color:#5b21b6">${c.code}</td><td><div style="font-weight:700">${c.nm}</div><div style="font-size:10.5px;color:#94a3b8">${c.rl||'—'}</div></td><td><div style="font-size:12px" dir="ltr">${c.ph||'—'}</div></td><td style="text-align:left;font-weight:800;color:#5b21b6">${fc(c.am)} ج.م</td><td><span class="bd" style="background:${bg2};color:${cl2}">${c.tp}</span></td><td style="text-align:center;font-size:11.5px">${c.lastPay||'—'}</td><td style="text-align:center"><span class="bd" style="background:#dcfce7;color:#16a34a">${c.status}</span></td><td style="text-align:center"><span class="bd" onclick="cycleCharityStatus('${c.id}')" style="cursor:pointer;${getCharityStatus(c.id)==='استلم'?'background:#dcfce7;color:#16a34a':'background:#ffe5e5;color:#e03131'}" title="اضغط لتغيير حالة الاستلام">${getCharityStatus(c.id)}</span></td><td style="font-size:11.5px;color:#4a5982;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.nt||'—'}</td><td style="text-align:center"><div style="display:flex;justify-content:center;gap:3px"><button class="btn bg bi bs" onclick="editChr('${c.id}')"><span class="ms ms-sm">edit_note</span></button><button class="btn bd2 bi bs" onclick="delChr('${c.id}')"><span class="ms ms-sm">delete</span></button></div></td></tr>`;}).join('');}
 function editChr(id){
   const c=DB.chr.find(x=>x.id===id);if(!c)return;document.getElementById('cf-id').value=c.id;['nm','ph','ad','am','tp','rc','rl','nt'].forEach(k=>{const el=document.getElementById('cf-'+k);if(el)el.value=c[k]||''});document.getElementById('chr-mo-title').textContent='تعديل بيانات الحالة';document.getElementById('chr-mo').classList.add('open');}
 function delChr(id){if(!confirm('حذف الحالة؟'))return;DB.chr=DB.chr.filter(c=>c.id!==id);sv('chr',DB.chr);renderChr();toast('حُذفت','success')}
@@ -5172,7 +5218,12 @@ function scanAttendanceIssues(){
   // نطاق التحليل يتوقف عند آخر تاريخ وصلت له بيانات بصمة فعليًا (لو موجود)،
   // مش عند تاريخ اليوم — عشان منقترحش غياب لأيام لسه البيانات متوصلتش لها
   const lastSync = DB.rules['lastAttSyncDate'];
-  const cutoffStr = (lastSync && lastSync < todayStr) ? lastSync : todayStr;
+  // نطاق التحليل يتوقف عند "أمس" وليس "النهاردة" — اليوم الحالي لسه ما خلصش
+  // فمش عادل نحكم عليه (الموظف ممكن يمضي حضور لاحقًا في نفس اليوم)، وبرضه
+  // بيراعي آخر تاريخ وصلت له بيانات بصمة فعليًا لو كان أقدم من كده
+  const yesterday = new Date(todayStr+'T00:00:00'); yesterday.setDate(yesterday.getDate()-1);
+  const yesterdayStr = localDateStr(yesterday);
+  const cutoffStr = (lastSync && lastSync < yesterdayStr) ? lastSync : yesterdayStr;
   const daysInMonth = new Date(y, m, 0).getDate();
   const activeEmps = DB.emp.filter(e=>e.st==='نشط');
 
@@ -5223,17 +5274,18 @@ function scanAttendanceIssues(){
           createdAt: new Date().toISOString()
         });
         attChanged = true;
-        // سجل متابعة إجراءات — بيتنفذ تلقائي (الحالة بتتسجل فورًا) لكن بيفضل
-        // بانتظار مراجعة المحاسب، خصوصًا لو ده نتيجة تعديل رجعي على يوم سابق
+        // حالة واضحة وغير ملتبسة — الموظف أكمل 6 أيام واليوم يوم راحته المحدد،
+        // فمفيش داعي لمراجعة المحاسب؛ بس بتتسجل في متابعة الإجراءات كسجل تدقيق
+        // بحالة "تمت الموافقة" تلقائيًا (بدون ما تظهر كتنبيه محتاج تدخّل)
         const trackId = 'trk_'+e.id+'_'+dt;
         if(!DB.issues.find(i=>i.id===trackId)){
           DB.issues.push({
             id: trackId, eid:e.id, dt, type:'راحة أسبوعية',
-            systemFinding:'الموظف أكمل 6 أيام عمل محتسبة، ولم يسجل حضورًا في يوم الراحة — تم تسجيله راحة أسبوعية تلقائيًا، يرجى المراجعة',
-            suggestedAction:'rest', executedAction:'rest', finalAction:null,
-            status:'بانتظار المراجعة', history:[],
+            systemFinding:'الموظف أكمل 6 أيام عمل محتسبة، ولم يسجل حضورًا في يوم الراحة المحدد له — تم تسجيله راحة أسبوعية تلقائيًا',
+            suggestedAction:'rest', executedAction:'rest', finalAction:'rest',
+            status:'تمت الموافقة', history:[],
             createdAt:new Date().toISOString(), createdBy:'نظام',
-            decidedBy:null, decidedAt:null
+            decidedBy:'نظام', decidedAt:new Date().toISOString()
           });
           issuesChanged = true;
         }
@@ -5785,9 +5837,13 @@ function listenFpStatusInfo(){
         try{
           if(!snap.exists()) return;
           const val = snap.val();
-          // نحدّث المؤشر بس لو الجهاز ده نفسه مالوش اتصال مباشر حاليًا —
-          // عشان مؤشر الجهاز المتصل فعليًا يفضل دايمًا يعكس حالته الحقيقية هو بس
-          if(!window._fpHasDirectConn){
+          // نحدّث المؤشر من فايربيز بس في حالة واحدة: الجهاز ده عمل فحصه
+          // المحلي فعليًا، ولقى إنه مالوش اتصال مباشر، ومحصلش معاه أي اتصال
+          // محلي ناجح طول الجلسة دي أصلاً (يعني هو غالبًا جهاز بعيد حقيقي،
+          // مش الجهاز الأم في لحظة انقطاع مؤقت) — الجهاز اللي نجح يتصل
+          // محليًا ولو مرة واحدة بيفضل دايمًا يعتمد على فحصه هو بس، عشان
+          // منوريهوش "متصل" وهمي من بيانات قديمة بتاعته هو نفسه
+          if(window._fpLocalCheckDone && !window._fpHasDirectConn && !window._fpEverConnectedLocally){
             updateServerIndicator(val.online===true);
           }
         } catch(e){}
@@ -5806,11 +5862,14 @@ async function checkServerStatus(){
     const data = await res.json();
     const online = data.status==='ok';
     window._fpHasDirectConn = online;
+    window._fpLocalCheckDone = true;
+    if(online) window._fpEverConnectedLocally = true;
     updateServerIndicator(online);
     notifyFpStatusIfChanged(online);
     return online;
   } catch(e){
     window._fpHasDirectConn = false;
+    window._fpLocalCheckDone = true;
     updateServerIndicator(false);
     notifyFpStatusIfChanged(false);
     return false;
@@ -5837,9 +5896,11 @@ async function performFingerprintSync(){
     const res = await fetch('http://localhost:7788/ping', {signal: AbortSignal.timeout(2000)});
     const data = await res.json();
     window._fpHasDirectConn = true;
+    window._fpLocalCheckDone = true;
+    window._fpEverConnectedLocally = true;
     updateServerIndicator(true);
     notifyFpStatusIfChanged(true);
-    if(data.status !== 'ok'){ window._fpHasDirectConn=false; updateServerIndicator(false); notifyFpStatusIfChanged(false); return result; }
+    if(data.status !== 'ok'){ window._fpHasDirectConn=false; window._fpLocalCheckDone=true; updateServerIndicator(false); notifyFpStatusIfChanged(false); return result; }
     result.serverOk = true;
 
     const syncRes = await fetch(
@@ -5902,6 +5963,7 @@ async function performFingerprintSync(){
   } catch(e) {
     // السيرفر مش شغال أو فيه مشكلة اتصال
     window._fpHasDirectConn = false;
+    window._fpLocalCheckDone = true;
     updateServerIndicator(false);
     notifyFpStatusIfChanged(false);
   }
