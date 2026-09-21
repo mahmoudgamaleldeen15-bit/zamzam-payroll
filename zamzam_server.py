@@ -16,7 +16,7 @@ import os
 # =============================================
 # إعدادات الجهاز
 # =============================================
-DEVICE_IP   = "192.168.1.201"
+DEVICE_IP   = "192.168.2.201"
 DEVICE_PORT = 4370
 PASSWORD    = 0
 SERVER_PORT = 7788  # بورت الـ server المحلي
@@ -85,7 +85,7 @@ class ZamzamHandler(BaseHTTPRequestHandler):
     def get_device_info(self):
         try:
             from zk import ZK
-            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=8, password=PASSWORD, ommit_ping=True)
+            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=8, password=PASSWORD)
             conn = zk.connect()
             info = {
                 'status': 'connected',
@@ -105,7 +105,7 @@ class ZamzamHandler(BaseHTTPRequestHandler):
             from datetime import datetime
 
             print(f"  🔌 الاتصال بـ {DEVICE_IP}:{DEVICE_PORT}...")
-            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=10, password=PASSWORD, ommit_ping=True)
+            zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=10, password=PASSWORD)
             conn = zk.connect()
             print(f"  ✅ متصل!")
 
