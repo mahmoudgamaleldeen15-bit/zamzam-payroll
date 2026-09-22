@@ -1376,6 +1376,14 @@ body.auth-mode {
         </select>
         <div style="font-size:10.5px;color:#94a3b8;margin-top:3px">قيمة الأوفرتايم نفسها (الأساس والمعامل) تُحدَّد من "القواعد والإعدادات" لكل الموظفين معًا</div></div>
       <div><label class="fl">التأمينات</label><select class="fi" id="ef-in"><option>مؤمَّن عليه</option><option>غير مشمول</option></select></div>
+      <div style="background:#eef2ff;border-radius:10px;padding:10px 12px;border:1px solid #c7d2fe">
+        <div style="font-size:11px;font-weight:700;color:#4a5982;margin-bottom:6px">نوع المعاملة: <span id="ef-att-exempt-badge" style="font-weight:800;color:#0f2057">موظف عادي</span></div>
+        <label class="fl" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+          <input type="checkbox" id="ef-att-exempt" style="width:15px;height:15px;accent-color:#4338ca"/>
+          <span style="font-weight:700;color:#3730a3">استثناء من نظام الحضور والجزاءات</span>
+        </label>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:4px">لمدراء الإدارة والشركاء وكل موظف لا ينطبق عليه نظام الحضور — يفضل ظاهر في الموظفين والمرتبات طبيعي، بس من غير تأخير/غياب/جزاءات/إشعارات/أوفرتايم تلقائي مرتبطين بالحضور</div>
+      </div>
       <div>
         <label class="fl" style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="ef-late-ex" style="width:15px;height:15px;accent-color:#0f2057"/>
@@ -2125,6 +2133,8 @@ async function fbAutoDownloadChanges(fbTs){
     const _fromP = document.getElementById('at-from');
     const _toP = document.getElementById('at-to');
     const _savedFilters = { ef:_efP?.value, mf:_mfP?.value, from:_fromP?.value, to:_toP?.value };
+    // نحفظ رقم صفحة تاب الموظفين برضه — نفس المبدأ (Save Data Only، بدون Reset لحالة الشاشة)
+    const _keepEPg2 = (typeof ePg!=='undefined') ? ePg : null;
 
     if(typeof renderDash  === 'function') renderDash();
     if(typeof renderEmp   === 'function') renderEmp();
@@ -2148,6 +2158,12 @@ async function fbAutoDownloadChanges(fbTs){
     if(_fromP && _savedFilters.from!==undefined && _fromP.value!==_savedFilters.from){ _fromP.value=_savedFilters.from; _filtersChanged=true; }
     if(_toP && _savedFilters.to!==undefined && _toP.value!==_savedFilters.to){ _toP.value=_savedFilters.to; _filtersChanged=true; }
     if(_filtersChanged && typeof renderAtt==='function') renderAtt();
+
+    // نستعيد رقم صفحة الموظفين برضه لو الريندر رجّعه لـ1
+    if(_keepEPg2!==null && typeof ePg!=='undefined' && typeof eAll!=='undefined' && typeof EPS!=='undefined'){
+      ePg = Math.min(_keepEPg2, Math.max(1, Math.ceil(eAll.length/EPS)));
+      if(typeof renderEmpTbl==='function') renderEmpTbl();
+    }
 
     // إشعار بالتغييرات
     showSyncChangesNotification(changes, fbTs);
@@ -2565,6 +2581,10 @@ function calcSlip(emp){
   let otRecs = [];
   if(empOtEligible){
     otRecs = DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m&&Number(a.ot)>0);
+    // الموظف المستثنى من نظام الحضور: نستبعد الأوفرتايم الجاي تلقائيًا من مزامنة
+    // البصمة (مش إجراء إداري صريح) — أي أوفرتايم مُدخل يدويًا من شاشة الحضور
+    // يفضل يُحتسب طبيعي زي ما هو
+    if(emp.attExempt) otRecs = otRecs.filter(a=>a.nt!=='مزامنة تلقائية');
   }
   // أساس حساب قيمة الساعة — القاعدة الوحيدة المستخدمة لكل حسابات الأوفرتايم
   // بالساعة، تُحدَّد من القواعد والإعدادات فقط (مفيش قاعدة تانية في مكان تاني)
@@ -2583,7 +2603,7 @@ function calcSlip(emp){
   const totalOt=otRecs.reduce((s,a)=>s+Number(a.ot||0),0);
   // حضور
   const absRecs=DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m);// غياب بإذن — من الأساسي
-  const absDays=absRecs.filter(a=>a.st==='غياب بإذن'||a.st==='غياب').length;const absPen=absDays*dailyGross*gr('ab_ml',1);// الغياب بإذن = شامل المرتب (مع البدلات الداخلة)// بدل الراحة — فقط لو لم يأخذ كل راحاته
+  const absDays=absRecs.filter(a=>a.st==='غياب بإذن'||a.st==='غياب').length;const absPen=emp.attExempt?0:absDays*dailyGross*gr('ab_ml',1);// الغياب بإذن = شامل المرتب (مع البدلات الداخلة)// بدل الراحة — فقط لو لم يأخذ كل راحاته
   const restDayNum2=emp.restDay!==undefined&&emp.restDay!==''?Number(emp.restDay):-1;
   let restOtDays=0;
   if(restDayNum2>=0){
@@ -2606,14 +2626,17 @@ function calcSlip(emp){
   // mult = معامل × يوم شامل
   if(uMode==='full')               unAuthPen=unAuthDays*dailyGross;else if(uMode==='full_plus_fixed_var')  unAuthPen=unAuthDays*(dailyGross + dailyGross);// يوم شامل + يوم (ث+م)
   else if(uMode==='full_plus_2fixed_var') unAuthPen=unAuthDays*(dailyGross + dailyGross*2);// يوم شامل + يومين
-  else if(uMode==='two_full')      unAuthPen=unAuthDays*dailyGross*2;else if(uMode==='full_plus_one_fixed_var') unAuthPen=unAuthDays*(dailyGross + dailyBasic + dailyAllow);else if(uMode==='basic')         unAuthPen=unAuthDays*dailyBasic;else if(uMode==='mult')          unAuthPen=unAuthDays*dailyGross*gr('r_unauth_ml',1);else                             unAuthPen=unAuthDays*dailyGross;// التأخير المتدرج
+  else if(uMode==='two_full')      unAuthPen=unAuthDays*dailyGross*2;else if(uMode==='full_plus_one_fixed_var') unAuthPen=unAuthDays*(dailyGross + dailyBasic + dailyAllow);else if(uMode==='basic')         unAuthPen=unAuthDays*dailyBasic;else if(uMode==='mult')          unAuthPen=unAuthDays*dailyGross*gr('r_unauth_ml',1);else                             unAuthPen=unAuthDays*dailyGross;
+  // الموظف المستثنى من نظام الحضور والجزاءات: لا يُحتسب عليه أي جزاء غياب
+  if(emp.attExempt) unAuthPen=0;
+  // التأخير المتدرج
   // سماح التأخير: لو الموظف عنده استثناء خاص نستخدمه، غير كده القاعدة العامة
   const empLateGrace = emp.lateEx && Number(emp.lateGrace||0)>0
     ? Number(emp.lateGrace)
     : gr('lt_gr',15);
   let latePen=0;
   // استبعاد كامل من خصم التأخير — بغض النظر عن دقائق التأخير الفعلية
-  const lateRecs = emp.lateExempt ? [] : absRecs.filter(a=>Number(a.lateMin||0)>empLateGrace);
+  const lateRecs = (emp.lateExempt || emp.attExempt) ? [] : absRecs.filter(a=>Number(a.lateMin||0)>empLateGrace);
   lateRecs.forEach(a=>{
     const mins=Number(a.lateMin||0);
     const dB=dailyBasic;const dG=dailyGross;
@@ -2685,10 +2708,12 @@ function renderEmpTbl(){
     </tr>`;}).join('');const tp=Math.ceil(eAll.length/EPS),pag=document.getElementById('e-pag');if(tp<=1){pag.innerHTML='';return}
   let h='';for(let i=1;i<=tp;i++)h+=`<button onclick="empPg(${i})" style="width:29px;height:29px;border-radius:7px;border:none;font-family:Cairo,sans-serif;font-size:12px;font-weight:700;cursor:pointer;background:${i===ePg?'#0f2057':'#f0f4fc'};color:${i===ePg?'#fff':'#4a5982'}">${i}</button>`;pag.innerHTML=h;}
 function empPg(p){ePg=p;renderEmpTbl()}
-function openEmpMo(){document.getElementById('ef-id').value='';clearEmpForm();clearAllowances();document.getElementById('emp-mo-title').textContent='إضافة موظف جديد';document.getElementById('emp-mo').classList.add('open');setTimeout(()=>renderAllowancesList(),100)}
+function openEmpMo(){window._reopenDrAfterSave=null;document.getElementById('ef-id').value='';clearEmpForm();clearAllowances();document.getElementById('emp-mo-title').textContent='إضافة موظف جديد';document.getElementById('emp-mo').classList.add('open');setTimeout(()=>renderAllowancesList(),100)}
 function closeEmpMo(){document.getElementById('emp-mo').classList.remove('open')}
 function clearEmpForm(){
   ['ef-nm','ef-cd','ef-ttl','ef-bs','ef-al','ef-ph','ef-jn'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});clearAllowances();const tsel=document.getElementById('ef-ttl-select');if(tsel)tsel.value='';const pd=document.getElementById('ef-photo-data');if(pd)pd.value='';const pp=document.getElementById('ef-photo-preview');if(pp){pp.innerHTML='<span id="ef-photo-initials">؟</span>';pp.style.backgroundImage='';}
+  // موظف جديد = غير مستثنى افتراضيًا
+  const attExCb3=document.getElementById('ef-att-exempt');if(attExCb3){attExCb3.checked=false;attExCb3.dispatchEvent(new Event('change'));}
 }
 
 // ===== ميعاد الحضور — حساب الانصراف المتوقع تلقائيًا =====
@@ -2738,15 +2763,37 @@ function saveEmp(){
     photo:photoEl&&photoEl.value?photoEl.value:(existEmp?existEmp.photo||'':''),
     lateEx:document.getElementById('ef-late-ex')?.checked||false,
     lateGrace:Number(document.getElementById('ef-late-grace')?.value)||0,
+    attExempt:document.getElementById('ef-att-exempt')?.checked||false,
     restDay:document.getElementById('ef-rest-day')?.value??'',
-    leaveBal:Number(document.getElementById('ef-leave-bal')?.value)||30,
     leaveUsed:existEmp?.leaveUsed||{},
     workTime:document.getElementById('ef-workTime')?.value||'',
-    st:'نشط'};if(id){const i=DB.emp.findIndex(x=>x.id===id);if(i>=0)DB.emp[i]=e}else DB.emp.push(e);sv('emp',DB.emp);closeEmpMo();toast(`تم حفظ ${nm}`,'success');renderEmp();renderDash();}
+    st:'نشط'};
+  // قراءة رصيد الإجازات بأمان — الطريقة القديمة (Number(v)||30) كانت بترجّع 30
+  // غلط لو القيمة فاضية أو 0، حتى لو المستخدم كتب رقم فعلي؛ هنا بنفرّق صح بين
+  // "الحقل فاضي فعلاً" (يرجع للافتراضي 30) و"المستخدم كتب رقم" (يتاخد زي ما هو)
+  const _lbRaw = document.getElementById('ef-leave-bal')?.value;
+  e.leaveBal = (_lbRaw!==undefined && _lbRaw!=='' && !isNaN(Number(_lbRaw))) ? Number(_lbRaw) : 30;
+  if(id){const i=DB.emp.findIndex(x=>x.id===id);if(i>=0)DB.emp[i]=e}else DB.emp.push(e);sv('emp',DB.emp);closeEmpMo();toast(`تم حفظ ${nm}`,'success');
+  // Save Data Only — نحفظ الحالة الحالية (رقم الصفحة) قبل التحديث،
+  // ونرجّعها زي ما كانت بعده بدل ما renderEmp/filterEmp يرجّعوا الصفحة لـ1
+  const _keepEPg = ePg;
+  renderEmp();renderDash();
+  ePg = Math.min(_keepEPg, Math.max(1, Math.ceil(eAll.length/EPS)));
+  renderEmpTbl();
+  // لو الحفظ ده كان من داخل بطاقة الموظف (Drawer) — نرجّع نفس البطاقة بالبيانات الجديدة
+  if(window._reopenDrAfterSave === e.id){ openDr(e.id); window._reopenDrAfterSave = null; }
+}
 function editEmp(id){
-  const e=DB.emp.find(x=>x.id===id);if(!e)return;document.getElementById('ef-id').value=e.id;['nm','cd','dp','ttl','bs','al','ph','jn','tp','ot'].forEach(k=>{const el=document.getElementById('ef-'+k);if(el)el.value=e[k]||''});document.getElementById('ef-in').value=e.ins||'مؤمَّن عليه';const insAmtEd=document.getElementById('ef-ins-amt');if(insAmtEd)insAmtEd.value=e.insAmt||'';const rdEl=document.getElementById('ef-rest-day');if(rdEl)rdEl.value=e.restDay??'';const lbEl=document.getElementById('ef-leave-bal');if(lbEl)lbEl.value=e.leaveBal||30;
+  const e=DB.emp.find(x=>x.id===id);if(!e)return;
+  // لو المستخدم فاتح بطاقة الموظف (Drawer) ودخل تعديل منها،
+  // نتذكر ده عشان نرجّعه لنفس البطاقة بعد الحفظ بدل ما تفضل مقفولة
+  window._reopenDrAfterSave = document.getElementById('emp-dr')?.classList.contains('open') ? id : null;
+  document.getElementById('ef-id').value=e.id;['nm','cd','dp','ttl','bs','al','ph','jn','tp','ot'].forEach(k=>{const el=document.getElementById('ef-'+k);if(el)el.value=e[k]||''});document.getElementById('ef-in').value=e.ins||'مؤمَّن عليه';const insAmtEd=document.getElementById('ef-ins-amt');if(insAmtEd)insAmtEd.value=e.insAmt||'';const rdEl=document.getElementById('ef-rest-day');if(rdEl)rdEl.value=e.restDay??'';const lbEl=document.getElementById('ef-leave-bal');if(lbEl)lbEl.value=e.leaveBal||30;
   // تحميل ميعاد الحضور
   const wtEl=document.getElementById('ef-workTime');if(wtEl){ wtEl.value=e.workTime||''; wtEl.dispatchEvent(new Event('change')); }
+  // تحميل استثناء الحضور والجزاءات
+  const attExCb2=document.getElementById('ef-att-exempt');
+  if(attExCb2){ attExCb2.checked=!!e.attExempt; attExCb2.dispatchEvent(new Event('change')); }
   // تحميل إعدادات التأخير (كانت مفقودة — الحقول كانت بتتحفظ لكن ما بترجعش تظهر عند فتح الكارت تاني)
   const lateExCb2=document.getElementById('ef-late-ex');
   if(lateExCb2){ lateExCb2.checked=!!e.lateEx; lateExCb2.dispatchEvent(new Event('change')); }
@@ -4854,6 +4901,15 @@ function toggleOtFixed(selId, wrapId){
 
 // إضافة event listeners للـ select
 document.addEventListener('DOMContentLoaded',()=>{
+  // checkbox استثناء الحضور والجزاءات — تحديث شارة "نوع المعاملة" لحظيًا
+  const attExCb=document.getElementById('ef-att-exempt');
+  if(attExCb) attExCb.addEventListener('change',function(){
+    const badge=document.getElementById('ef-att-exempt-badge');
+    if(badge){
+      badge.textContent = this.checked ? 'مستثنى من الحضور والجزاءات' : 'موظف عادي';
+      badge.style.color = this.checked ? '#4338ca' : '#0f2057';
+    }
+  });
   // checkbox سماح التأخير الخاص
   const lateExCb=document.getElementById('ef-late-ex');
   if(lateExCb) lateExCb.addEventListener('change',function(){
@@ -5226,7 +5282,10 @@ function scanAttendanceIssues(){
   const yesterdayStr = localDateStr(yesterday);
   const cutoffStr = (lastSync && lastSync < yesterdayStr) ? lastSync : yesterdayStr;
   const daysInMonth = new Date(y, m, 0).getDate();
-  const activeEmps = DB.emp.filter(e=>e.st==='نشط');
+  // الموظف المستثنى من نظام الحضور والجزاءات (attExempt) لا يخضع لأي فحص هنا —
+  // نقطة مركزية واحدة توقف عنه: تنبيهات الغياب، بدل الراحة التلقائي،
+  // الراحة الأسبوعية التلقائية، ونقص الانصراف — كلها من هنا بالظبط
+  const activeEmps = DB.emp.filter(e=>e.st==='نشط' && !e.attExempt);
 
   let attChanged = false;
   let issuesChanged = false;
@@ -5517,20 +5576,19 @@ function showNotifications(){
 
     let actionsHtml = '';
     if(canAct){
-      if(iss.type==='no_attendance'){
-        actionsHtml =
-          "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
-          + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest_swap')\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
-          + "<button onclick=\"resolveAttIssue('"+iss.id+"','permitted')\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
-          + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized')\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
-          + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
-          + "</div>";
-      } else {
-        actionsHtml =
-          "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
-          + "<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>موافقة</button>"
-          + "</div>";
-      }
+      // نفس مجموعة الإجراءات الكاملة لكل أنواع السجلات — عشان المحاسب
+      // يقدر يصحّح أي اقتراح تلقائي (سواء غياب أو بدل راحة أو راحة أسبوعية...)
+      // مش بس يوافق عليه أو يسيبه زي ما هو
+      actionsHtml =
+        "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest_swap')\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>راحة أسبوعية</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','permitted')\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized')\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+        + "<button onclick=\"resolveAttIssue('"+iss.id+"','present')\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>حضور</button>"
+        + "<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' style='background:#f0f4fc;color:#94a3b8'>موافقة على المقترح</button>"
+        + "</div>";
     } else {
       actionsHtml = "<div style='font-size:11px;color:#94a3b8;margin-top:8px'>لا تملك صلاحية اتخاذ إجراء على هذا التنبيه</div>";
     }
@@ -5675,10 +5733,11 @@ function resolveAttIssue(issueId, actionType){
     rest_swap: 'يوم بدل راحة',
     permitted: 'غياب بإذن',
     unauthorized: 'غياب بدون إذن',
-    present: 'حضور'
+    present: 'حضور',
+    rest: 'راحة أسبوعية'
   };
 
-  const actionLabels = {rest_swap:'بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية', present:'حضور'};
+  const actionLabels = {rest_swap:'بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية', present:'حضور', rest:'راحة أسبوعية'};
 
   if(actionType==='leave'){
     // إجازة اعتيادية — بنفس منطق خصم الرصيد المستخدم في باقي النظام
