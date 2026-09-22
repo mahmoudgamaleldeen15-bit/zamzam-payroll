@@ -3014,7 +3014,21 @@ function filterPay(){
 function showWAModal(){
   const act=DB.emp.filter(e=>e.st==='نشط');if(!act.length){toast('لا يوجد موظفون','error');return}
   const p=calcSlip(act[0]);document.getElementById('wa-txt').textContent=`مرحباً ${act[0].nm||'الموظف'} (${act[0].cd||'—'})،\n\nتم صرف راتب ${MAR[DB.cycle.m-1]} ${DB.cycle.y}:\n• الأساسي:${fc(p.basic)} ج.م\n• البدلات:${fc(p.allow)} ج.م\n• الإضافي:${fc(p.otVal)} ج.م\n• الاستقطاعات:${fc(p.deduct)} ج.م\n\n✅ الصافي:${fc(p.net)} ج.م\n\nزمزم Payroll`;document.getElementById('wa-mo').classList.add('open');}
-function sendWA1(id){const e=DB.emp.find(x=>x.id===id);if(!e)return;const p=calcSlip(e);window.open(`https://wa.me/${(e.ph||'').replace(/^0/,'20')}?text=${encodeURIComponent(`مرحباً ${e.nm}\nصافي راتب ${MAR[DB.cycle.m-1]}:${fc(p.net)} ج.م\nزمزم Payroll`)}`,'_blank')}
+function sendWA1(id){
+  const e=DB.emp.find(x=>x.id===id);if(!e)return;
+  const p=calcSlip(e);
+  const status=getPayStatus(id);
+  const monthLabel=MAR[DB.cycle.m-1], year=DB.cycle.y;
+  let msg;
+  if(status==='صرف'){
+    // الراتب اتصرف فعلاً — رسالة تأكيد استلام
+    msg = `مرحبًا ${e.nm}،\nنفيدك بأنه تم استلام راتبك المستحق عن شهر ${monthLabel} لعام ${year} بنجاح.\nشكرًا لجهودك وعملك معنا.\n\nزمزم 💰payroll\nزمزم ديزيرت`;
+  } else {
+    // لسه "لم يُصرف" أو "قيد" — رسالة تجهيز الراتب بالتفصيل، يحضر يستلمه
+    msg = `مرحباً ${e.nm}\n\nتم تجهيز راتب ${monthLabel} ${year}:\n• الأساسي:${fc(p.basic)} ج.م\n• البدلات:${fc(p.allow)} ج.م\n• الإضافي:${fc(p.otVal)} ج.م\n• الاستقطاعات:${fc(p.deduct)} ج.م\n\n✅ الصافي:${fc(p.net)} ج.م\nيرجى الحضور لقسم الخزينة لاستلام المرتب\n\nزمزم 💰payroll\nزمزم ديزيرت`;
+  }
+  window.open(`https://wa.me/${(e.ph||'').replace(/^0/,'20')}?text=${encodeURIComponent(msg)}`,'_blank');
+}
 function sendAllWA(){document.getElementById('wa-mo').classList.remove('open');toast('تم بدء إرسال الإشعارات','success')}
 
 // ===================== ATTENDANCE =====================
