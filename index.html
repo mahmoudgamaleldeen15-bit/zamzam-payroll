@@ -1910,14 +1910,25 @@ async function fbPull(key){
 // (تم دمج sv مع النسخة الموحدة بالأسفل — لمنع تعريفها مرتين)
 
 // ===== تحديث وقت آخر تعديل على Firebase (يُستدعى بعد أي حفظ فعلي) =====
-async function fbTouchLastUpdate(){
+async function fbTouchLastUpdate(key){
   if(!fbOnline || !window._fb) return;
   try{
     const { ref, set, db } = window._fb;
+    const ts = new Date().toISOString();
     await set(ref(db, 'zz/_lastUpdate'), {
-      ts: new Date().toISOString(),
+      ts,
       device: (navigator.userAgent||'').slice(0,50)
     });
+    // علامة خفيفة جدًا لكل جدول لوحده (أساس تقليل استهلاك التحميل) —
+    // مبتغيّرش في شكل zz/_lastUpdate القديم فوق ده ولا في أي سلوك تاني،
+    // مجرد إضافة صغيرة بجانبه
+    if(key){
+      await set(ref(db, 'zz/_lastUpdateKeys/'+key), { ts });
+    } else if(typeof FB_SYNC_KEYS!=='undefined'){
+      // من غير جدول محدد (رفع كامل يدوي) — كل الجداول بقت محدّثة فعلاً
+      const allTs = {}; FB_SYNC_KEYS.forEach(k=>{ allTs[k] = { ts }; });
+      await set(ref(db, 'zz/_lastUpdateKeys'), allTs);
+    }
   } catch(e){}
 }
 
@@ -2077,12 +2088,30 @@ async function fbAutoDownloadChanges(fbTs){
   
   const changes = []; // تتبع التغييرات
 
+  // ===== تحسين استهلاك التحميل (إضافي بحت — بدون تغيير أي منطق قديم) =====
+  // بدل ما ننزّل كل الـ14 جدول من Firebase مع كل تحديث حتى لو جدول واحد
+  // بس اتغيّر، نجيب الأول علامة خفيفة جدًا (كام بايت) بتقول أي جدول فعلاً
+  // اتغيّر من آخر مزامنة لينا، ونتخطى تحميل أي جدول متأكدين إنه زي ما هو.
+  // أي شك أو نقص في العلامة دي (أول مرة، أو مشكلة اتصال) → الجدول ده
+  // ينزّل عادي بنفس المنطق القديم بالظبط، زي ما كان يحصل قبل التحسين ده
+  let _keyTs = null;
+  try{
+    const ktSnap = await get(ref(db, 'zz/_lastUpdateKeys'));
+    if(ktSnap.exists()) _keyTs = ktSnap.val();
+  } catch(e){}
+  const _localKeyTs = JSON.parse(localStorage.getItem('zz_lastSyncKeys') || '{}');
+  const _newLocalKeyTs = {..._localKeyTs};
+
   for(const k of FB_SYNC_KEYS){
+    // تخطي آمن — بس لو عندنا علامة موثوقة إن الجدول ده لسه زي ما هو
+    if(_keyTs && _keyTs[k] && _keyTs[k].ts && _localKeyTs[k] === _keyTs[k].ts) continue;
     try{
       const snap = await get(ref(db, 'zz/'+k));
       if(!snap.exists()) continue;
       
       const fbData  = snap.val();
+      // نسجّل إننا شفنا آخر نسخة من الجدول ده دلوقتي — سواء اتغيرت أو لأ
+      if(_keyTs && _keyTs[k] && _keyTs[k].ts) _newLocalKeyTs[k] = _keyTs[k].ts;
       const localRaw = localStorage.getItem('zz_'+k);
       const localData = localRaw ? JSON.parse(localRaw) : null;
       
@@ -2121,6 +2150,8 @@ async function fbAutoDownloadChanges(fbTs){
 
   // تحديث وقت آخر sync
   localStorage.setItem('zz_lastSync', fbTs);
+  // حفظ خريطة آخر مزامنة موثوقة لكل جدول لوحده — أساس التحسين في المرة الجاية
+  localStorage.setItem('zz_lastSyncKeys', JSON.stringify(_newLocalKeyTs));
 
   if(changes.length > 0){
     // تحديث كل الصفحات — بغض النظر عن الصفحة المفتوحة حاليًا، عشان أي
@@ -2280,7 +2311,7 @@ function _svOriginal(k,d){
 function sv(k, d){
   _svOriginal(k, d);
   if(fbSyncEnabled && fbOnline && FB_SYNC_KEYS.includes(k)){
-    fbPush(k, d).then(()=>fbTouchLastUpdate()).catch(()=>{});
+    fbPush(k, d).then(()=>fbTouchLastUpdate(k)).catch(()=>{});
   }
 }
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
@@ -2400,7 +2431,7 @@ function convertAttStatus(attId, newStatus, opts={}){
   if(newStatus === 'إجازة اعتيادية'){
     const year = new Date(rec.dt).getFullYear();
     const used = DB.leaves.filter(l=>l.eid===rec.eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
-    const bal = Number(emp.leaveBal||30);
+    const bal = empLeaveBal(emp);
     if(used >= bal){
       toast('رصيد الإجازات غير كافٍ','error');
       return false;
@@ -2562,6 +2593,14 @@ function recalcDayOT(eid, dt){
   });
 }
 
+// ===== قراءة رصيد الإجازات السنوي بأمان — موحّدة في كل الملف =====
+// بتفرّق صح بين "القيمة صفر فعلاً" (تتاخد زي ما هي) و"القيمة مش
+// محدّدة خالص" (يترجع للافتراضي 30) — النمط القديم (X.leaveBal||30)
+// كان بيتعامل مع الصفر كأنه فاضي ويرجّعه 30 غلط
+function empLeaveBal(e){
+  const v = e && e.leaveBal;
+  return (v!==undefined && v!==null && v!=='') ? Number(v) : 30;
+}
 function calcSlip(emp){
   const basic=Number(emp.bs)||0;
   const allowArr=emp.allowances||[];
@@ -2763,6 +2802,7 @@ function saveEmp(){
     photo:photoEl&&photoEl.value?photoEl.value:(existEmp?existEmp.photo||'':''),
     lateEx:document.getElementById('ef-late-ex')?.checked||false,
     lateGrace:Number(document.getElementById('ef-late-grace')?.value)||0,
+    lateExempt:document.getElementById('ef-late-exempt')?.checked||false,
     attExempt:document.getElementById('ef-att-exempt')?.checked||false,
     restDay:document.getElementById('ef-rest-day')?.value??'',
     leaveUsed:existEmp?.leaveUsed||{},
@@ -2788,7 +2828,7 @@ function editEmp(id){
   // لو المستخدم فاتح بطاقة الموظف (Drawer) ودخل تعديل منها،
   // نتذكر ده عشان نرجّعه لنفس البطاقة بعد الحفظ بدل ما تفضل مقفولة
   window._reopenDrAfterSave = document.getElementById('emp-dr')?.classList.contains('open') ? id : null;
-  document.getElementById('ef-id').value=e.id;['nm','cd','dp','ttl','bs','al','ph','jn','tp','ot'].forEach(k=>{const el=document.getElementById('ef-'+k);if(el)el.value=e[k]||''});document.getElementById('ef-in').value=e.ins||'مؤمَّن عليه';const insAmtEd=document.getElementById('ef-ins-amt');if(insAmtEd)insAmtEd.value=e.insAmt||'';const rdEl=document.getElementById('ef-rest-day');if(rdEl)rdEl.value=e.restDay??'';const lbEl=document.getElementById('ef-leave-bal');if(lbEl)lbEl.value=e.leaveBal||30;
+  document.getElementById('ef-id').value=e.id;['nm','cd','dp','ttl','bs','al','ph','jn','tp','ot'].forEach(k=>{const el=document.getElementById('ef-'+k);if(el)el.value=e[k]||''});document.getElementById('ef-in').value=e.ins||'مؤمَّن عليه';const insAmtEd=document.getElementById('ef-ins-amt');if(insAmtEd)insAmtEd.value=e.insAmt||'';const rdEl=document.getElementById('ef-rest-day');if(rdEl)rdEl.value=e.restDay??'';const lbEl=document.getElementById('ef-leave-bal');if(lbEl)lbEl.value=empLeaveBal(e);
   // تحميل ميعاد الحضور
   const wtEl=document.getElementById('ef-workTime');if(wtEl){ wtEl.value=e.workTime||''; wtEl.dispatchEvent(new Event('change')); }
   // تحميل استثناء الحضور والجزاءات
@@ -4252,7 +4292,7 @@ function updateLeaveBalance(){
   if(!e){box.style.display='none';return;}
   const year = new Date().getFullYear();
   const used = DB.leaves.filter(l=>l.eid===eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
-  const bal = Number(e.leaveBal||30);
+  const bal = empLeaveBal(e);
   const rem = bal - used;
   box.style.display = 'block';
   box.style.background = rem<=5?'#fff0f0':rem<=10?'#fef3c7':'#f0fdf4';
@@ -4467,7 +4507,7 @@ function printLeaveForm(id){
     <div class="row">
       <div class="field">
         <label>رصيد الإجازات السنوي</label>
-        <div class="val filled">${e.leaveBal||30} يوم</div>
+        <div class="val filled">${empLeaveBal(e)} يوم</div>
       </div>
       <div class="field">
         <label>المستهلك قبل هذا الطلب</label>
@@ -4475,7 +4515,7 @@ function printLeaveForm(id){
       </div>
       <div class="field">
         <label>الرصيد المتبقي بعد الإجازة</label>
-        <div class="val filled" style="color:#16a34a">${(Number(e.leaveBal||30)-DB.leaves.filter(x=>x.eid===e.id&&x.year===l.year&&x.status!=='ملغاة').reduce((s,x)=>s+x.days,0))} يوم</div>
+        <div class="val filled" style="color:#16a34a">${(empLeaveBal(e)-DB.leaves.filter(x=>x.eid===e.id&&x.year===l.year&&x.status!=='ملغاة').reduce((s,x)=>s+x.days,0))} يوم</div>
       </div>
     </div>
     ${l.note?`<div class="field" style="margin-top:8px"><label>سبب الإجازة</label><div class="val filled">${l.note}</div></div>`:''}
@@ -4615,14 +4655,14 @@ function repairLeaveRecords(){
 
 function renderLeave(){
   initLeaveYear();const year = Number(document.getElementById('lv-year')?.value||new Date().getFullYear());const q = (document.getElementById('lv-q')?.value||'').toLowerCase();const emps = DB.emp.filter(e=>e.st==='نشط'&&(!q||(e.nm||'').toLowerCase().includes(q)));// KPIs
-  const totBal = emps.reduce((s,e)=>s+Number(e.leaveBal||30),0);const usedYear = DB.leaves.filter(l=>l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const usedMonth = DB.leaves.filter(l=>l.year===year&&l.month===DB.cycle.m&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const remaining = totBal - usedYear;document.getElementById('lv-kpis').innerHTML = `
+  const totBal = emps.reduce((s,e)=>s+empLeaveBal(e),0);const usedYear = DB.leaves.filter(l=>l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const usedMonth = DB.leaves.filter(l=>l.year===year&&l.month===DB.cycle.m&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const remaining = totBal - usedYear;document.getElementById('lv-kpis').innerHTML = `
     ${kpiCard('beach_access','إجمالي الرصيد السنوي',totBal+' يوم','#0f2057','#eef2ff')}
     ${kpiCard('event_busy','مأخوذ هذا الشهر',usedMonth+' يوم','#d97706','#fef3c7')}
     ${kpiCard('event_busy','مأخوذ هذا العام',usedYear+' يوم','#e03131','#ffe5e5')}
     ${kpiCard('event_available','المتبقي الكلي',remaining+' يوم','#16a34a','#dcfce7')}`;const tbody = document.getElementById('lv-body');if(!emps.length){tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:36px;color:#94a3b8">لا موظفين</td></tr>';return;}
 
   tbody.innerHTML = emps.map(e=>{
-    const bal = Number(e.leaveBal||30);const usedY = DB.leaves.filter(l=>l.eid===e.id&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const usedM = DB.leaves.filter(l=>l.eid===e.id&&l.year===year&&l.month===DB.cycle.m&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const rem = bal - usedY;const remColor = rem<=5?'#e03131':rem<=10?'#d97706':'#16a34a';return`<tr>
+    const bal = empLeaveBal(e);const usedY = DB.leaves.filter(l=>l.eid===e.id&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const usedM = DB.leaves.filter(l=>l.eid===e.id&&l.year===year&&l.month===DB.cycle.m&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const rem = bal - usedY;const remColor = rem<=5?'#e03131':rem<=10?'#d97706':'#16a34a';return`<tr>
       <td style="font-weight:700">${e.nm}<br/><span style="font-size:10.5px;color:#94a3b8">${e.cd||''}</span></td>
       <td><span style="background:#eef2ff;color:#0f2057;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700">${e.dp||'—'}</span></td>
       <td style="text-align:center;font-weight:800;color:#0f2057">${bal}</td>
@@ -4698,7 +4738,7 @@ function saveLeave(autoPrint=false){
   const eid=document.getElementById('lvf-emp')?.value;const from=document.getElementById('lvf-from')?.value;const to=document.getElementById('lvf-to')?.value;if(!eid||!from||!to){toast('اختر الموظف وتواريخ الإجازة','error');return;}
   const days=Math.round((new Date(to)-new Date(from))/(1000*60*60*24))+1;if(days<=0){toast('التاريخ غير صحيح','error');return;}
   const emp=DB.emp.find(e=>e.id===eid);const year=Number(from.split('-')[0]);const month=Number(from.split('-')[1]);// التحقق من الرصيد
-  const used=DB.leaves.filter(l=>l.eid===eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const bal=Number(emp?.leaveBal||30);if(used+days>bal){toast(`رصيد ${emp?.nm} غير كافٍ — المتبقي:${bal-used} يوم فقط`,'error');return;}
+  const used=DB.leaves.filter(l=>l.eid===eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);const bal=empLeaveBal(emp);if(used+days>bal){toast(`رصيد ${emp?.nm} غير كافٍ — المتبقي:${bal-used} يوم فقط`,'error');return;}
   const substitute=document.getElementById('lvf-sub')?.value||'';
   const rec={
     id:uid(),eid,from,to,days,year,month,
@@ -4730,7 +4770,7 @@ function viewLeaveHistory(eid, year){
   if(!e) return;
   const recs = DB.leaves.filter(l=>l.eid===eid&&l.year===Number(year)&&l.status!=='ملغاة').sort((a,b)=>a.from.localeCompare(b.from));
   const used = recs.reduce((s,l)=>s+Number(l.days||0),0);
-  const bal = Number(e.leaveBal||30);
+  const bal = empLeaveBal(e);
 
   // نفكّ كل سجل إجازة (ممكن يكون نطاق أيام) لأيام فردية — عشان نقدر نلغي يوم واحد بعينه
   // بنفس منطق الإلغاء الآمن اللي بيحترم باقي أيام السجل (تقسيم بدل إلغاء الكل)
@@ -4960,7 +5000,7 @@ function exportEmployeesCSV(){
   const rows=[['الكود','الاسم','القسم','المسمى','الأساسي','البدلات','التأمين','يوم الراحة','رصيد الإجازات','الحالة']];
   DB.emp.forEach(e=>{
     const allow=(e.allowances||[]).reduce((s,a)=>s+Number(a.val||0),0)||(Number(e.al)||0);
-    rows.push([e.cd||'',e.nm||'',e.dp||'',e.ttl||'',e.bs||0,allow,e.insAmt||0,e.restDay!==''?['أحد','اثنين','ثلاثاء','أربعاء','خميس','جمعة','سبت'][e.restDay]||'':'',e.leaveBal||30,e.st||'']);
+    rows.push([e.cd||'',e.nm||'',e.dp||'',e.ttl||'',e.bs||0,allow,e.insAmt||0,e.restDay!==''?['أحد','اثنين','ثلاثاء','أربعاء','خميس','جمعة','سبت'][e.restDay]||'':'',empLeaveBal(e),e.st||'']);
   });
   const csv=rows.map(r=>r.join(',')).join('\n');
   const a=document.createElement('a');
@@ -5450,7 +5490,7 @@ function pendingNotifCount(){
   }).length;
   const lowLeave = DB.emp.filter(e=>{
     const used = DB.leaves.filter(l=>l.eid===e.id&&l.year===DB.cycle.y&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
-    return (Number(e.leaveBal||30)-used) <= 5;
+    return (empLeaveBal(e)-used) <= 5;
   }).length;
   return pendingIssues + endAdv + absThis + renew + lowLeave;
 }
@@ -5531,7 +5571,7 @@ function showNotifications(){
   }
 
   // رصيد إجازات منخفض
-  const lowLeaveRecs = DB.emp.filter(e=>{ const used=DB.leaves.filter(l=>l.eid===e.id&&l.year===cy&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0); return (Number(e.leaveBal||30)-used)<=5; });
+  const lowLeaveRecs = DB.emp.filter(e=>{ const used=DB.leaves.filter(l=>l.eid===e.id&&l.year===cy&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0); return (empLeaveBal(e)-used)<=5; });
   if(lowLeaveRecs.length){
     alertGroups.push({
       title:'رصيد إجازات منخفض ('+lowLeaveRecs.length+')', icon:'beach_access', color:'#0369a1', bg:'#e0f2fe',
@@ -5673,7 +5713,7 @@ function editPastDecision(issueId, actionType){
     } else {
       const year = new Date(iss.dt).getFullYear();
       const used = DB.leaves.filter(l=>l.eid===iss.eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
-      const bal = Number(emp.leaveBal||30);
+      const bal = empLeaveBal(emp);
       if(used >= bal){ toast('رصيد الإجازات غير كافٍ','error'); return; }
       DB.att.push({id:uid(), eid:iss.eid, dt:iss.dt, y:year, m:new Date(iss.dt).getMonth()+1, d:new Date(iss.dt).getDate(), ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'تعديل قرار سابق', isLate:false, createdAt:new Date().toISOString()});
       const lid = 'lv_att_'+DB.att[DB.att.length-1].id;
@@ -5743,7 +5783,7 @@ function resolveAttIssue(issueId, actionType){
     // إجازة اعتيادية — بنفس منطق خصم الرصيد المستخدم في باقي النظام
     const year = new Date(iss.dt).getFullYear();
     const used = DB.leaves.filter(l=>l.eid===iss.eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
-    const bal = Number(emp.leaveBal||30);
+    const bal = empLeaveBal(emp);
     if(used >= bal){ toast('رصيد الإجازات غير كافٍ لهذا الموظف','error'); return; }
 
     DB.att.push({
@@ -6980,7 +7020,7 @@ function viewLeaveDetail(eid, year){
   if(existing) existing.remove();
 
   const MONTHS_VD=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
-  const bal = Number(e.leaveBal||30);
+  const bal = empLeaveBal(e);
   const used = recs.reduce((s,l)=>s+Number(l.days||0),0);
 
   const mo = document.createElement('div');
