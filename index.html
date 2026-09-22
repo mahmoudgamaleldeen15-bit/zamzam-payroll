@@ -491,6 +491,7 @@ body.auth-mode {
       <button class="btn bg" onclick="document.getElementById('emp-excel-input').click()"><span class="ms ms-sm">upload</span>استيراد CSV</button>
       <button class="btn bg" onclick="exportEmployeesCSV()"><span class="ms ms-sm">download</span>تصدير CSV</button>
       <button class="btn bg" style="background:#ffe5e5;color:#e03131" onclick="openDuplicateCodesModal()"><span class="ms ms-sm">content_copy</span>فحص أكواد مكررة</button>
+      <button class="btn bg" style="background:#fff7ed;color:#d97706" onclick="openSpuriousEmployeesModal()"><span class="ms ms-sm">person_search</span>مراجعة سجلات مشكوك فيها</button>
       <button class="btn bn" onclick="openEmpMo()"><span class="ms ms-sm">person_add</span>موظف جديد</button>
     </div>
   </div>
@@ -6401,6 +6402,74 @@ function openDuplicateCodesModal(){
       </div>
     </div>`;
   document.body.appendChild(mo);
+}
+
+// ===== مراجعة الموظفين اللي غالبًا مش حقيقيين — بيانات فاضية تمامًا
+// (مرتب، قسم، تليفون) + مفيش أي سجل حضور خالص. ده هو النمط بالظبط اللي
+// كان بيتولّد من الاستيراد التلقائي القديم من جهاز البصمة (قبل ما يتوقف).
+// *** الأداة دي عرض واختيار يدوي بس — مفيش أي حذف تلقائي إطلاقًا ***
+// كل الصفوف تبدأ من غير تحديد، والمحاسب هو اللي يختار ويأكد بنفسه =====
+function findLikelySpuriousEmployees(){
+  return DB.emp.filter(e=>{
+    const hasAtt = DB.att.some(a=>a.eid===e.id);
+    const hasSalary = Number(e.bs)>0;
+    const hasAllowances = e.allowances && e.allowances.length>0;
+    const hasPhone = e.ph && String(e.ph).trim();
+    const hasDept = e.dp && e.dp!=='غير محدد' && e.dp!=='';
+    return !hasAtt && !hasSalary && !hasAllowances && !hasPhone && !hasDept;
+  });
+}
+
+function openSpuriousEmployeesModal(){
+  const list = findLikelySpuriousEmployees();
+  document.getElementById('spur-emp-mo')?.remove();
+  const mo2 = document.createElement('div');
+  mo2.className='mo open'; mo2.id='spur-emp-mo';
+  mo2.style.cssText='display:flex;z-index:400';
+  mo2.innerHTML = `
+    <div class="mb" style="max-width:560px;max-height:85vh;overflow-y:auto;padding:0">
+      <div style="background:linear-gradient(135deg,#0f2057,#e03131);padding:16px 20px;display:flex;align-items:center;gap:10px">
+        <span class="ms" style="color:#fff">person_search</span>
+        <div style="flex:1"><div style="font-size:14px;font-weight:800;color:#fff">مراجعة موظفين محتمل مش حقيقيين</div><div style="font-size:11px;color:#fecaca">${list.length} سجل — بيانات فاضية بالكامل ومفيش أي سجل حضور</div></div>
+        <button onclick="document.getElementById('spur-emp-mo').remove()" style="background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff"><span class="ms">close</span></button>
+      </div>
+      <div style="padding:12px 16px;background:#fff7ed;border-bottom:1px solid #fed7aa;font-size:11px;color:#92400e">
+        ⚠️ ولا سجل هيتحذف إلا اللي تحدده أنت بنفسك وتضغط "حذف المحدد" في الآخر. راجع كل اسم كويس الأول.
+      </div>
+      <div style="padding:10px 16px;display:flex;gap:8px">
+        <button class="btn bg bs" onclick="document.querySelectorAll('.spur-emp-chk').forEach(c=>c.checked=true)">تحديد الكل</button>
+        <button class="btn bg bs" onclick="document.querySelectorAll('.spur-emp-chk').forEach(c=>c.checked=false)">إلغاء التحديد</button>
+      </div>
+      <div style="padding:0 16px 14px" id="spur-emp-list">
+        ${!list.length ? '<div style="text-align:center;padding:24px;color:#94a3b8">مفيش سجلات مطابقة دلوقتي ✅</div>' : list.map(e=>`
+          <label style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #eaeffa;border-radius:9px;padding:9px 12px;margin-bottom:6px;cursor:pointer">
+            <input type="checkbox" class="spur-emp-chk" value="${e.id}" style="width:16px;height:16px;flex-shrink:0"/>
+            <div style="flex:1">
+              <div style="font-size:12.5px;font-weight:700;color:#0d1b3e">${e.nm}</div>
+              <div style="font-size:10px;color:#94a3b8">كود: ${e.cd||'—'}</div>
+            </div>
+          </label>`).join('')}
+      </div>
+      ${list.length?`<div style="padding:12px 16px;border-top:1px solid #f0f4fc">
+        <button class="btn bd2" style="width:100%" onclick="deleteSelectedSpuriousEmployees()"><span class="ms ms-sm">delete</span>حذف المحدد فقط</button>
+      </div>`:''}
+    </div>`;
+  document.body.appendChild(mo2);
+}
+
+function deleteSelectedSpuriousEmployees(){
+  const session = getSession();
+  if(!session || session.role!=='admin'){ toast('صلاحية مرفوضة','error'); return; }
+  const checked = Array.from(document.querySelectorAll('.spur-emp-chk:checked'));
+  if(!checked.length){ toast('حدد سجل واحد على الأقل الأول','warning'); return; }
+  const ids = checked.map(c=>c.value);
+  const names = ids.map(id=>DB.emp.find(e=>e.id===id)?.nm||'?');
+  if(!confirm(`هتحذف ${ids.length} سجل نهائيًا:\n\n${names.join('، ')}\n\nمتأكد؟ الإجراء ده مينفعش يتراجع.`)) return;
+  DB.emp = DB.emp.filter(e=>!ids.includes(e.id));
+  sv('emp', DB.emp);
+  toast(`✅ تم حذف ${ids.length} سجل`,'success');
+  renderEmp();
+  openSpuriousEmployeesModal();
 }
 
 // زرار مزامنة يدوية في الـ dashboard
