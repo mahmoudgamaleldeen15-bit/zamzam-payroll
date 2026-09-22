@@ -898,6 +898,7 @@ body.auth-mode {
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn bn" onclick="archiveCurrentMonthFull()"><span class="ms ms-sm">archive</span>أرشفة الشهر الحالي</button>
+      <button class="btn bn" style="background:#0f2057" onclick="archiveMonthAndStartNext()"><span class="ms ms-sm">redo</span>أرشفة وبدء الشهر التالي</button>
       <button class="btn bg" onclick="archiveCurrentYear()"><span class="ms ms-sm">calendar_month</span>أرشفة سنوية</button>
     </div>
   </div>
@@ -6471,12 +6472,12 @@ function renderReport(type){
 // ===== أرشفة الشهر الحالي كاملاً =====
 function archiveCurrentMonthFull(){
   const session = getSession();
-  if(!session || session.role!=='admin'){ toast('الأرشفة للأدمن فقط','error'); return; }
+  if(!session || session.role!=='admin'){ toast('الأرشفة للأدمن فقط','error'); return false; }
 
   const y = DB.cycle.y, m = DB.cycle.m;
   const label = MAR[m-1]+' '+y;
 
-  if(!confirm('سيتم أخذ نسخة مجمّدة من بيانات '+label+' الآن.\nلو فيه أرشيف سابق لنفس الشهر هيتم استبداله بأحدث نسخة.\nمتابعة؟')) return;
+  if(!confirm('سيتم أخذ نسخة مجمّدة من بيانات '+label+' الآن.\nلو فيه أرشيف سابق لنفس الشهر هيتم استبداله بأحدث نسخة.\nمتابعة؟')) return false;
 
   const existingIdx = DB.archives.findIndex(a=>a.type==='monthly'&&a.y===y&&a.m===m);
 
@@ -6518,6 +6519,46 @@ function archiveCurrentMonthFull(){
   logActivity('أرشفة شهرية', label);
   toast('✅ تم أرشفة '+label+' بنجاح','success');
   renderArchivePage();
+  return true;
+}
+
+// ===== أرشفة الشهر الحالي + الانتقال للشهر التالي تلقائيًا، في خطوة واحدة =====
+// بتستخدم نفس منطق archiveCurrentMonthFull بالظبط (نداء مباشر، من غير تكرار)،
+// ولو المستخدم لغى تأكيد الأرشفة، بتوقف فورًا ومتنقلش للشهر الجديد خالص —
+// عشان نضمن إن الأرشفة حصلت فعليًا قبل أي انتقال
+function archiveMonthAndStartNext(){
+  const session = getSession();
+  if(!session || session.role!=='admin'){ toast('الأرشفة للأدمن فقط','error'); return; }
+
+  const oldLabel = MAR[DB.cycle.m-1]+' '+DB.cycle.y;
+
+  const archived = archiveCurrentMonthFull();
+  if(!archived) return; // المستخدم لغى، أو فشلت الأرشفة — منكملش
+
+  // الانتقال للشهر التالي (مع ترحيل السنة لو كان ديسمبر)
+  let {y, m} = DB.cycle;
+  if(m===12){ m=1; y=y+1; } else { m=m+1; }
+  DB.cycle = {y, m};
+  sv('cycle', DB.cycle);
+  setCycleLabel();
+
+  // نفس التحديثات اللي بتحصل عادي لما تغيّر الشهر من منتقي الشهر —
+  // كل تاب فيه فلتر يدوي بيفضل زي ما هو، والباقي بيتبع الشهر الجديد تلقائيًا
+  if(typeof renderDash==='function') renderDash();
+  if(typeof renderPay==='function') renderPay();
+  if(typeof renderRent==='function') renderRent();
+  if(typeof renderAtt==='function') renderAtt();
+  if(typeof renderAdv==='function') renderAdv();
+  if(typeof renderDraws==='function') renderDraws();
+  if(typeof renderLeave==='function') renderLeave();
+  if(typeof renderChr==='function') renderChr();
+  if(typeof renderRestDays==='function') renderRestDays();
+  if(typeof scanAttendanceIssues==='function') scanAttendanceIssues();
+  if(typeof renderActionTracking==='function') renderActionTracking();
+  if(typeof updateNotifDot==='function') updateNotifDot();
+  if(typeof renderArchivePage==='function') renderArchivePage();
+
+  toast(`✅ تم أرشفة ${oldLabel}، وبدأ ${MAR[m-1]} ${y} الآن`,'success');
 }
 
 // ===== أرشفة سنوية (تجميع من الأرشيفات الشهرية الموجودة) =====
