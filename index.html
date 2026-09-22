@@ -6123,7 +6123,8 @@ async function performFingerprintSync(){
       notifyFpStatusIfChanged(false);
       return result;
     }
-    if(syncData.status !== 'success' || !syncData.records?.length) return result;
+    if(syncData.status !== 'success') return result;
+    if(!syncData.records?.length && !syncData.allUsers?.length) return result;
 
     // نسجّل آخر تاريخ فعليًا وصلت له بيانات من البصمة (مش تاريخ تشغيل البرنامج) —
     // ده اللي هيحدد نطاق تحليل "متابعة الإجراءات" بدل ما يعتمد على تاريخ اليوم
@@ -6146,6 +6147,25 @@ async function performFingerprintSync(){
       }
     });
     if(result.newEmps>0){ sv('emp',DB.emp); renderEmp(); }
+
+    // ===== 1ب) إضافة منفصلة تمامًا: موظفين بصموا على جهاز البصمة فعلاً
+    // لكن لسه مالهمش أي حضور مسجّل في الشهر ده (فمش موجودين في records
+    // فوق خالص، ومكانش فيه طريقة نكتشفهم بيها قبل كده). بنجيبهم من قائمة
+    // كل المستخدمين المسجّلين على الجهاز (allUsers)، لو السيرفر بيرجّعها.
+    // ما بتأثرش على منطق الحضور فوق ولا بتغيّره خالص — إضافة بحتة =====
+    if(Array.isArray(syncData.allUsers)){
+      syncData.allUsers.forEach(u=>{
+        const codeN = String(u.code||'').trim();
+        if(!codeN) return;
+        const exists = DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase());
+        if(!exists){
+          const safeName = (u.name && String(u.name).trim()) ? String(u.name).trim() : ('موظف '+codeN);
+          DB.emp.push({id:uid(),nm:safeName,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل',ins:'غير مشمول',insAmt:0,st:'نشط'});
+          result.newEmps++;
+        }
+      });
+      if(result.newEmps>0){ sv('emp',DB.emp); renderEmp(); }
+    }
 
     // ===== 2) تحديث/إضافة الحضور — مع الحفاظ على أي يوم اتعدّل يدويًا =====
     syncData.records.forEach(r=>{
