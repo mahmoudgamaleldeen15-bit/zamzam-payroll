@@ -767,12 +767,12 @@ body.auth-mode {
         <div><label class="fl">أكثر من 60 دقيقة: خصم</label><select class="fi" id="r-lt-60-mode"><option value="full_basic">يوم كامل من الأساسي</option><option value="full_gross">يوم كامل من الشامل</option></select></div>
         <div><label class="fl">خصم غياب بإذن</label>
           <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;font-size:12px;color:#15803d">
-            ✅ يوم واحد من <strong>شامل المرتب</strong> (أساسي + البدلات الداخلة في الحساب)
-            <br/><span style="font-size:11px;color:#4ade80">البدلات المحددة كـ"خارجية" في كارت الموظف لا تدخل في الحساب</span>
+            <span id="r-ab-summary">✅ يوم واحد من <strong>شامل المرتب الحالي</strong> (أساسي + البدلات الداخلة في الحساب)</span>
+            <br/><span id="r-ab-summary-note" style="font-size:11px;color:#4ade80">البدلات المحددة كـ"خارجية" في كارت الموظف لا تدخل في الحساب</span>
           </div>
           <input class="fi" id="r-ab-ml" type="number" step="0.5" value="1" style="display:none"/></div>
         <div><label class="fl">أساس حساب يوم الغياب بإذن</label>
-          <select class="fi" id="r-ab-base">
+          <select class="fi" id="r-ab-base" onchange="updateAbBaseSummary()">
             <option value="current">شامل المرتب الحالي (البدلات الداخلة في الحساب فقط)</option>
             <option value="full">شامل المرتب كله (كل البدلات، حتى الخارجية)</option>
           </select>
@@ -3619,7 +3619,7 @@ function exportArcCSV(arcId){
 
 // ===================== RULES =====================
 function loadRules(){
-  const def={ins_co:26,ins_fixed:0,ot_mx:120,lt_gr:15,lt_ml:1,ab_ml:1,r_tr:500,r_lv:300,r_bn:10,unauth_mode:'full',r_unauth_ml:1};const r={...def,...DB.rules};const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=r[k]});const umEl=document.getElementById('r-unauth-mode');if(umEl)umEl.value=r['unauth_mode']||'full';const umlEl=document.getElementById('r-unauth-ml');if(umlEl)umlEl.value=r['r_unauth_ml']||1;const abBaseEl=document.getElementById('r-ab-base');if(abBaseEl)abBaseEl.value=r['ab_base']||'current';const unauthBaseEl=document.getElementById('r-unauth-base');if(unauthBaseEl)unauthBaseEl.value=r['unauth_base']||'current';// أوفرتايم
+  const def={ins_co:26,ins_fixed:0,ot_mx:120,lt_gr:15,lt_ml:1,ab_ml:1,r_tr:500,r_lv:300,r_bn:10,unauth_mode:'full',r_unauth_ml:1};const r={...def,...DB.rules};const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=r[k]});const umEl=document.getElementById('r-unauth-mode');if(umEl)umEl.value=r['unauth_mode']||'full';const umlEl=document.getElementById('r-unauth-ml');if(umlEl)umlEl.value=r['r_unauth_ml']||1;const abBaseEl=document.getElementById('r-ab-base');if(abBaseEl)abBaseEl.value=r['ab_base']||'current';const unauthBaseEl=document.getElementById('r-unauth-base');if(unauthBaseEl)unauthBaseEl.value=r['unauth_base']||'current';updateAbBaseSummary();// أوفرتايم
   const otHrBase=document.getElementById('r-ot-hr-base');if(otHrBase)otHrBase.value=r['ot_hr_base']||'basic';const otRgMode=document.getElementById('r-ot-rg-mode');if(otRgMode)otRgMode.value=r['ot_rg_mode']||'1.5';const otDayMode=document.getElementById('r-ot-day-mode');if(otDayMode){otDayMode.value=r['ot_day_mode']||'full_1';document.getElementById('r-ot-day-fixed-wrap').style.display=r['ot_day_mode']==='fixed'?'block':'none';}
   const otDayFixed=document.getElementById('r-ot-day-fixed');if(otDayFixed)otDayFixed.value=r['ot_day_fixed']||0;const otRestMode=document.getElementById('r-ot-rest-mode');if(otRestMode){otRestMode.value=r['ot_rest_mode']||'full_2';document.getElementById('r-ot-rest-fixed-wrap').style.display=r['ot_rest_mode']==='fixed'?'block':'none';}
   const otRestFixed=document.getElementById('r-ot-rest-fixed');if(otRestFixed)otRestFixed.value=r['ot_rest_fixed']||0;}
@@ -3627,6 +3627,23 @@ function saveRules(){
   const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};const r={};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)r[k]=el.value});const umSv=document.getElementById('r-unauth-mode');if(umSv)r['unauth_mode']=umSv.value;const umlSv=document.getElementById('r-unauth-ml');if(umlSv)r['r_unauth_ml']=umlSv.value;const abBaseSv=document.getElementById('r-ab-base');if(abBaseSv)r['ab_base']=abBaseSv.value;const unauthBaseSv=document.getElementById('r-unauth-base');if(unauthBaseSv)r['unauth_base']=unauthBaseSv.value;// أوفرتايم
   const svOtHrBase=document.getElementById('r-ot-hr-base');if(svOtHrBase)r['ot_hr_base']=svOtHrBase.value;const svOtRg=document.getElementById('r-ot-rg-mode');if(svOtRg)r['ot_rg_mode']=svOtRg.value;const svOtDay=document.getElementById('r-ot-day-mode');if(svOtDay)r['ot_day_mode']=svOtDay.value;const svOtDayF=document.getElementById('r-ot-day-fixed');if(svOtDayF)r['ot_day_fixed']=svOtDayF.value;const svOtRest=document.getElementById('r-ot-rest-mode');if(svOtRest)r['ot_rest_mode']=svOtRest.value;const svOtRestF=document.getElementById('r-ot-rest-fixed');if(svOtRestF)r['ot_rest_fixed']=svOtRestF.value;['15','30','45','60'].forEach(n=>{const ltEl=document.getElementById('r-lt-'+n+'-mode');if(ltEl)r['lt_'+n+'_mode']=ltEl.value;});DB.rules={...DB.rules,...r};sv('rules',DB.rules);toast('تم حفظ القواعد','success');}
 function loadDefRules(){DB.rules={};sv('rules',DB.rules);loadRules();toast('تمت استعادة الافتراضي','info')}
+
+// ===== تحديث نص صندوق ملخص خصم الغياب بإذن ليتوافق مع أساس الحساب المختار
+// فعليًا، بدل ما يفضل ثابت على "شامل المرتب الحالي" حتى لو اختار المستخدم
+// "شامل المرتب كله" =====
+function updateAbBaseSummary(){
+  const sel = document.getElementById('r-ab-base');
+  const summary = document.getElementById('r-ab-summary');
+  const note = document.getElementById('r-ab-summary-note');
+  if(!sel || !summary) return;
+  if(sel.value==='full'){
+    summary.innerHTML = '✅ يوم واحد من <strong>شامل المرتب كله</strong> (أساسي + جميع البدلات)';
+    if(note) note.textContent = 'شامل حتى البدلات المحددة كـ"خارجية" في كارت الموظف';
+  } else {
+    summary.innerHTML = '✅ يوم واحد من <strong>شامل المرتب الحالي</strong> (أساسي + البدلات الداخلة في الحساب)';
+    if(note) note.textContent = 'البدلات المحددة كـ"خارجية" في كارت الموظف لا تدخل في الحساب';
+  }
+}
 
 // ===================== CHARITY =====================
 function openChrMo(){document.getElementById('cf-id').value='';clearChrForm();document.getElementById('chr-mo-title').textContent='تسجيل حالة مستفيدة';document.getElementById('chr-mo').classList.add('open')}
