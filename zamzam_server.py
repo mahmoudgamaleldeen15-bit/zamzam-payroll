@@ -221,11 +221,6 @@ class ZamzamHandler(BaseHTTPRequestHandler):
                 'label':   f"{MONTHS_AR[month-1]} {year}",
                 'total':   len(result_list),
                 'records': result_list,
-                # قائمة كل الموظفين المسجّلين على الجهاز (بصموا عليه) —
-                # بغض النظر عن وجود حضور فعلي ليهم في الشهر ده أو لأ.
-                # مبنية من نفس user_map اللي اتجابت فوق بالفعل — بدون أي
-                # اتصال إضافي بالجهاز خالص، إضافة بحتة على الرد الموجود
-                'allUsers': [{'code': uid_, 'name': nm_} for uid_, nm_ in user_map.items()],
             }
 
         except ImportError:

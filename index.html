@@ -495,13 +495,6 @@ body.auth-mode {
       <button class="btn bn" onclick="openEmpMo()"><span class="ms ms-sm">person_add</span>موظف جديد</button>
     </div>
   </div>
-  <div id="fp-unreg-banner" style="display:none;background:#fff7ed;border:1.5px solid #fed7aa;border-radius:12px;padding:11px 16px;margin-bottom:14px;align-items:center;gap:10px;justify-content:space-between">
-    <div style="display:flex;align-items:center;gap:9px">
-      <span class="ms" style="color:#d97706">fingerprint</span>
-      <span style="font-size:12.5px;font-weight:700;color:#92400e"><span id="fp-unreg-count">0</span> كود على جهاز البصمة مش مسجّل في النظام — مفيش أي إضافة تلقائية، راجعهم وحدد المطلوب إضافته بنفسك</span>
-    </div>
-    <button class="btn bn bs" onclick="openUnregisteredDeviceUsersModal()">مراجعة الأكواد</button>
-  </div>
   <div style="background:#fff;border-radius:13px;padding:12px;margin-bottom:14px;display:flex;gap:9px;flex-wrap:wrap;align-items:center;border:1px solid #eaeffa">
     <div style="position:relative;flex:1;min-width:200px"><span class="ms ms-sm" style="position:absolute;right:11px;top:50%;transform:translateY(-50%);color:#94a3b8">search</span><input class="fi" id="e-q" placeholder="بحث بالاسم أو الكود..." style="padding-right:36px" oninput="filterEmp()"/></div>
     <select class="fi" id="e-dept" style="width:auto;min-width:140px" onchange="filterEmp()"><option value="">كل الأقسام</option><option>شرقى</option><option>غربى</option><option>مخبوزات</option><option>ايس كريم</option><option>حسابات</option><option>تقنية المعلومات</option><option>المبيعات</option><option>الموارد البشرية</option><option>اللوجستيات</option><option>الإدارة العليا</option></select>
@@ -2769,7 +2762,6 @@ function animRef(){const b=document.getElementById('btn-ref');const ic=b?.queryS
 // ===================== EMPLOYEES =====================
 let ePg=1,eAll=[];const EPS=12;function renderEmp(){
   document.getElementById('e-ac').textContent=DB.emp.filter(e=>e.st==='نشط').length;document.getElementById('e-ic').textContent=DB.emp.filter(e=>e.st!=='نشط').length;document.getElementById('e-ins').textContent=DB.emp.filter(e=>e.ins==='مؤمَّن عليه').length;
-  updateUnregisteredDeviceUsersBanner();
   filterEmp();['at-ef','advf-em','af-em'].forEach(id=>{
     const s=document.getElementById(id);if(!s)return;s.innerHTML='<option value="">كل الموظفين</option>';DB.emp.forEach(e=>s.innerHTML+=`<option value="${e.id}">${e.nm} (${e.cd})</option>`);});}
 function filterEmp(){
@@ -6122,7 +6114,7 @@ function startServerMonitor(){
 
 // ===== المنطق الأساسي لجلب ودمج بيانات البصمة (يُستخدم في المزامنة اليومية واللحظية معًا) =====
 async function performFingerprintSync(){
-  const result = {serverOk:false, newEmps:0, added:0, updated:0, preserved:0, unregistered:0};
+  const result = {serverOk:false, newEmps:0, added:0, updated:0, preserved:0};
   try {
     const res = await fetch('http://localhost:7788/ping', {signal: AbortSignal.timeout(2000)});
     const data = await res.json();
@@ -6148,8 +6140,7 @@ async function performFingerprintSync(){
       notifyFpStatusIfChanged(false);
       return result;
     }
-    if(syncData.status !== 'success') return result;
-    if(!syncData.records?.length && !syncData.allUsers?.length) return result;
+    if(syncData.status !== 'success' || !syncData.records?.length) return result;
 
     // نسجّل آخر تاريخ فعليًا وصلت له بيانات من البصمة (مش تاريخ تشغيل البرنامج) —
     // ده اللي هيحدد نطاق تحليل "متابعة الإجراءات" بدل ما يعتمد على تاريخ اليوم
@@ -6172,28 +6163,6 @@ async function performFingerprintSync(){
       }
     });
     if(result.newEmps>0){ sv('emp',DB.emp); renderEmp(); }
-
-    // ===== 1ب) موظفون بصموا على جهاز البصمة فعلاً لكن لسه مالهمش أي حضور
-    // مسجّل في الشهر ده (فمش موجودين في records فوق خالص) — من قائمة كل
-    // المستخدمين المسجّلين على الجهاز (allUsers)، لو السيرفر بيرجّعها.
-    // *** لا يتم إضافتهم تلقائيًا لجدول الموظفين خالص *** — بس بيتجمعوا
-    // في قائمة للمراجعة اليدوية (window._fpUnregisteredUsers)، والمحاسب
-    // هو اللي يقرر يضيف مين بنفسه من تاب الموظفين — إضافة تلقائية صامتة
-    // كانت بتسبب أكواد مكررة/غير مقصودة =====
-    window._fpUnregisteredUsers = [];
-    if(Array.isArray(syncData.allUsers)){
-      syncData.allUsers.forEach(u=>{
-        const codeN = String(u.code||'').trim();
-        if(!codeN) return;
-        const exists = DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase());
-        if(!exists){
-          const safeName = (u.name && String(u.name).trim()) ? String(u.name).trim() : ('موظف '+codeN);
-          window._fpUnregisteredUsers.push({code:codeN, name:safeName});
-          result.unregistered++;
-        }
-      });
-      if(typeof updateUnregisteredDeviceUsersBanner==='function') updateUnregisteredDeviceUsersBanner();
-    }
 
     // ===== 2) تحديث/إضافة الحضور — مع الحفاظ على أي يوم اتعدّل يدويًا =====
     syncData.records.forEach(r=>{
@@ -6254,7 +6223,6 @@ async function autoSyncOnOpen(){
   if(r.updated)  parts.push(`🔄 ${r.updated} تحديث`);
   if(r.preserved) parts.push(`🔒 ${r.preserved} يوم معدّل محفوظ كما هو`);
   if(parts.length) toast('البصمة: '+parts.join(' — '),'success');
-  if(r.unregistered) toast(`⚠️ ${r.unregistered} كود على جهاز البصمة مش مسجّل بالنظام — راجعهم من تاب الموظفين`,'warning');
 }
 
 // ===== السحب اللحظي — بيشتغل تلقائيًا كل ٤٥ ثانية طول ما البرنامج مفتوح =====
@@ -6276,78 +6244,6 @@ async function livePollFingerprint(){
   } finally {
     _livePollBusy = false;
   }
-}
-
-// ===== شريط تنبيه أكواد البصمة اللي مش مسجّلة في النظام — إضافة يدوية بس =====
-function updateUnregisteredDeviceUsersBanner(){
-  const banner = document.getElementById('fp-unreg-banner');
-  const countEl = document.getElementById('fp-unreg-count');
-  if(!banner || !countEl) return;
-  const list = window._fpUnregisteredUsers || [];
-  countEl.textContent = list.length;
-  banner.style.display = list.length ? 'flex' : 'none';
-}
-
-// ===== نافذة مراجعة أكواد البصمة غير المسجّلة — إضافة كل كود بقرار يدوي صريح =====
-function openUnregisteredDeviceUsersModal(){
-  document.getElementById('fp-unreg-mo')?.remove();
-  const list = window._fpUnregisteredUsers || [];
-  const mo = document.createElement('div');
-  mo.className='mo open'; mo.id='fp-unreg-mo';
-  mo.style.cssText='display:flex;z-index:400';
-  mo.innerHTML = `
-    <div class="mb" style="max-width:460px;max-height:85vh;overflow-y:auto;padding:0">
-      <div style="background:linear-gradient(135deg,#0f2057,#d97706);padding:16px 20px;display:flex;align-items:center;gap:10px">
-        <span class="ms" style="color:#fff">fingerprint</span>
-        <div style="flex:1"><div style="font-size:14px;font-weight:800;color:#fff">أكواد بصمة غير مسجّلة</div><div style="font-size:11px;color:#fde68a">${list.length} كود — مراجعة يدوية، مفيش إضافة تلقائية</div></div>
-        <button onclick="document.getElementById('fp-unreg-mo').remove()" style="background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff"><span class="ms">close</span></button>
-      </div>
-      <div style="padding:14px 16px" id="fp-unreg-list">
-        ${!list.length ? '<div style="text-align:center;padding:24px;color:#94a3b8">مفيش أكواد محتاجة مراجعة دلوقتي</div>' : list.map(u=>`
-          <div id="fp-unreg-row-${u.code}" style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#f8faff;border-radius:9px;margin-bottom:6px">
-            <div>
-              <div style="font-size:12.5px;font-weight:700;color:#0d1b3e">${u.name}</div>
-              <div style="font-size:10.5px;color:#94a3b8">كود البصمة: ${u.code}</div>
-            </div>
-            <div style="display:flex;gap:5px">
-              <button class="btn bn bs" onclick="addUnregisteredDeviceUser('${u.code}')"><span class="ms ms-sm">person_add</span>إضافة</button>
-              <button class="btn bg bi bs" onclick="dismissUnregisteredDeviceUser('${u.code}')" title="تجاهل هذا الكود (مش موظف فعلي)"><span class="ms ms-sm">close</span></button>
-            </div>
-          </div>`).join('')}
-      </div>
-    </div>`;
-  document.body.appendChild(mo);
-}
-
-// ===== إضافة كود بصمة واحد كموظف جديد — بقرار صريح من المحاسب فقط =====
-function addUnregisteredDeviceUser(code){
-  const list = window._fpUnregisteredUsers || [];
-  const u = list.find(x=>x.code===code);
-  if(!u) return;
-  const codeN = String(u.code||'').trim();
-  const exists = DB.emp.find(e=>String(e.cd||'').trim().toLowerCase()===codeN.toLowerCase());
-  if(exists){
-    toast('الكود ده مسجّل بالفعل — '+exists.nm,'info');
-  } else {
-    DB.emp.push({id:uid(),nm:u.name,cd:codeN,dp:'غير محدد',ttl:'موظف',bs:'0',al:'0',ph:'',jn:'',tp:'شهري عادي',ot:'مؤهل',ins:'غير مشمول',insAmt:0,st:'نشط'});
-    sv('emp',DB.emp);
-    toast('✅ تم إضافة '+u.name,'success');
-  }
-  window._fpUnregisteredUsers = list.filter(x=>x.code!==code);
-  document.getElementById('fp-unreg-row-'+code)?.remove();
-  renderEmp();
-  const stillOpen = document.getElementById('fp-unreg-mo');
-  if(stillOpen) openUnregisteredDeviceUsersModal();
-}
-
-// ===== تجاهل كود بصمة (زي Supercard أو كروت اختبار مش موظفين فعليين) =====
-// بيتجاهل بس للجلسة الحالية — لو لسه موجود على الجهاز هيظهر تاني في المزامنة الجاية
-function dismissUnregisteredDeviceUser(code){
-  window._fpUnregisteredUsers = (window._fpUnregisteredUsers||[]).filter(x=>x.code!==code);
-  document.getElementById('fp-unreg-row-'+code)?.remove();
-  updateUnregisteredDeviceUsersBanner();
-  const stillOpen = document.getElementById('fp-unreg-mo');
-  if(stillOpen) openUnregisteredDeviceUsersModal();
 }
 
 // ===== فحص الأكواد المكررة في جدول الموظفين — أداة تشخيص وتنظيف يدوية =====
