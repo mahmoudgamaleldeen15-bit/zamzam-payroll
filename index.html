@@ -429,6 +429,8 @@ body.auth-mode {
       </button>
       <button class="btn bg" onclick="go('reports')"><span class="ms ms-sm">download</span>تصدير التقارير</button>
       <button class="btn bg" onclick="exportBackup()" title="نسخة احتياطية كاملة"><span class="ms ms-sm">backup</span>نسخ احتياطي</button>
+      <input type="file" id="backup-restore-input" accept=".json" style="display:none" onchange="importBackup(this)"/>
+      <button class="btn bg" onclick="document.getElementById('backup-restore-input').click()" title="استعادة نسخة احتياطية من ملف"><span class="ms ms-sm">restore</span>استعادة نسخة</button>
       <button class="btn bn" onclick="go('payroll')"><span class="ms ms-sm">calculate</span>احتساب الشهر</button>
     </div>
   </div>
@@ -3285,7 +3287,12 @@ function saveAttEdit(attId){
     }
   }
 
-  // 1) نحفظ تعديل الوقت والملاحظة أولاً (بدون لمس الحالة لسه)
+  // 1) نطبّق تعديل الوقت والملاحظة (من غير حفظ لسه) — وبعدين الحالة كمان
+  //    لو اتغيّرت، الاتنين في تحديث واحد بس بيتبعت لفايربيز مرة واحدة.
+  //    ده مهم جدًا: لو بعتنا الحفظ مرتين متتاليتين (مرة بالحالة القديمة
+  //    ومرة بالجديدة) ممكن السباق بين الاتنين يخلي فايربيز يحتفظ بالحالة
+  //    القديمة غلط لو وصلت هي التانية — فبقى تحديث واحد نهائي بس، بيمثّل
+  //    قرار المحاسب الفعلي، ومفيش أي نسخة وسطية بتتبعت خالص
   DB.att[idx] = {
     ...DB.att[idx],
     ti: ti||DB.att[idx].ti,
@@ -3294,15 +3301,15 @@ function saveAttEdit(attId){
     editedBy: session.name,
     editedAt: new Date().toISOString()
   };
-  sv('att', DB.att);
 
   // 2) لو الحالة اتغيّرت — لازم يمر على نفس منطق التحويل الموحّد
-  //    (convertAttStatus) اللي بيعالج رصيد الإجازات تلقائيًا —
-  //    نفس الدالة المستخدمة في تعديل كشف المرتبات، عشان مايبقاش
+  //    (convertAttStatus) اللي بيعالج رصيد الإجازات تلقائيًا وبيحفظ هو
+  //    نفسه — نفس الدالة المستخدمة في تعديل كشف المرتبات، عشان مايبقاش
   //    فيه منطقين مختلفين لنفس العملية
   if(newSt !== oldSt){
     convertAttStatus(attId, newSt);
   } else {
+    sv('att', DB.att);
     logActivity('تعديل سجل حضور', `${DB.emp.find(e=>e.id===DB.att[idx].eid)?.nm} — ${DB.att[idx].dt}`);
   }
 
@@ -5110,11 +5117,16 @@ function exportBackup(){
     emp:DB.emp,
     att:DB.att,
     adv:DB.adv,
+    draws:DB.draws,
     chr:DB.chr,
     rent:DB.rent,
     rentArchive:DB.rentArchive,
     rules:DB.rules,
     leaves:DB.leaves,
+    archives:DB.archives,
+    issues:DB.issues,
+    payDisburse:DB.payDisburse,
+    charityRecv:DB.charityRecv,
   };
   const a=document.createElement('a');
   a.href='data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(backup,null,2));
@@ -5131,13 +5143,16 @@ function importBackup(input){
     try{
       const backup=JSON.parse(e.target.result);
       if(!backup.version){toast('ملف غير صحيح','error');return;}
-      DB.emp=backup.emp||[];DB.att=backup.att||[];DB.adv=backup.adv||[];
-      DB.chr=backup.chr||[];DB.rent=backup.rent||[];DB.rentArchive=backup.rentArchive||[];
-      DB.rules=backup.rules||{};DB.cycle=backup.cycle||DB.cycle;DB.leaves=backup.leaves||[];
-      Object.keys(DB).forEach(k=>{if(k!=='leaves')sv(k,DB[k]);});
-      localStorage.setItem('zz_leaves',JSON.stringify(DB.leaves));
+      // نرجّع كل جدول موجود فعليًا في الملف — لو الملف من نسخة قديمة وناقصه
+      // جداول اتضافت بعدين (زي المسحوبات أو متابعة الإجراءات)، نسيب الموجود
+      // حاليًا في البرنامج زي ما هو بدل ما نمسحه بالغلط لمجرد إنه مش في الملف
+      let restoredCount = 0;
+      FB_SYNC_KEYS.forEach(k=>{
+        if(backup[k]!==undefined){ DB[k]=backup[k]; restoredCount++; }
+      });
+      Object.keys(DB).forEach(k=>{ if(FB_SYNC_KEYS.includes(k)) sv(k,DB[k]); });
       setCycleLabel();go('dashboard');
-      toast(`✅ تم استيراد النسخة بتاريخ ${backup.exportDate?.slice(0,10)}`,'success');
+      toast(`✅ تم استيراد النسخة بتاريخ ${backup.exportDate?.slice(0,10)} — ${restoredCount} جدول`,'success');
     }catch(err){toast('خطأ في قراءة الملف','error');}
   };
   reader.readAsText(file,'utf-8');
@@ -7479,11 +7494,15 @@ function savePayrollDayEdit(eid, dt){
     sv('att',DB.att);
     toast('تم إضافة اليوم','success');
   } else {
+    // نطبّق ملاحظة التحويل (لو موجودة) على السجل في الذاكرة قبل التحويل،
+    // عشان تتحفظ مع نفس التحديث الوحيد اللي convertAttStatus بيعمله —
+    // بدل ما نبعت حفظة تانية منفصلة لفايربيز لمجرد إضافة ملاحظة
+    if(note){
+      const preIdx=DB.att.findIndex(a=>a.id===rec.id);
+      if(preIdx>=0) DB.att[preIdx].convNote=note;
+    }
     const result=convertAttStatus(rec.id, newStatus);
     if(!result) return;
-    const idx=DB.att.findIndex(a=>a.id===rec.id);
-    if(idx>=0&&note) DB.att[idx].convNote=note;
-    sv('att',DB.att);
     toast('تم التحويل: '+result.oldStatus+' → '+result.newStatus,'success');
   }
 
