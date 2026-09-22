@@ -771,6 +771,13 @@ body.auth-mode {
             <br/><span style="font-size:11px;color:#4ade80">البدلات المحددة كـ"خارجية" في كارت الموظف لا تدخل في الحساب</span>
           </div>
           <input class="fi" id="r-ab-ml" type="number" step="0.5" value="1" style="display:none"/></div>
+        <div><label class="fl">أساس حساب يوم الغياب بإذن</label>
+          <select class="fi" id="r-ab-base">
+            <option value="current">شامل المرتب الحالي (البدلات الداخلة في الحساب فقط)</option>
+            <option value="full">شامل المرتب كله (كل البدلات، حتى الخارجية)</option>
+          </select>
+          <div style="font-size:10.5px;color:#94a3b8;margin-top:3px">الخصم يفضل يوم واحد زي ما هو — التغيير هنا بس في المرتب اللي بيتحسب عليه اليوم ده</div>
+        </div>
         <div style="height:1px;background:#eaeffa;margin:6px 0"></div>
         <div style="font-size:12px;font-weight:700;color:#e03131">غياب بدون إذن — طريقة الحساب</div>
         <div><label class="fl">اختر القاعدة</label>
@@ -784,6 +791,13 @@ body.auth-mode {
           <option value="mult">معامل × قيمة اليوم الشامل</option>
         </select></div>
         <div><label class="fl">المعامل (لو اخترت معامل)</label><input class="fi" id="r-unauth-ml" type="number" step="0.5" value="1"/></div>
+        <div><label class="fl">أساس الحساب</label>
+          <select class="fi" id="r-unauth-base">
+            <option value="current">شامل المرتب الحالي (البدلات الداخلة في الحساب فقط)</option>
+            <option value="full">شامل المرتب كله (كل البدلات، حتى الخارجية)</option>
+          </select>
+          <div style="font-size:10.5px;color:#94a3b8;margin-top:3px">القاعدة والمعامل المختارين فوق يفضلوا زي ما هما — التغيير هنا بس في المرتب اللي بيتحسب عليه</div>
+        </div>
       </div>
     </div>
     <div style="background:#fff;border-radius:16px;padding:20px;border:1px solid #eaeffa">
@@ -1483,14 +1497,17 @@ body.auth-mode {
   <!-- إشعار الاستحقاق -->
   <div id="adv-eligibility" style="display:none;border-radius:10px;padding:11px 14px;font-size:12.5px;font-weight:700"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px">
-      <div><label class="fl">مبلغ السلفة (ج.م) *</label><input class="fi" id="advf-am" type="number" placeholder="5000" oninput="checkAdvEligibility()"/></div>
+      <div><label class="fl">مبلغ السلفة (ج.م) *</label><input class="fi" id="advf-am" type="number" placeholder="5000" oninput="checkAdvEligibility();previewAdvInstMonths()"/></div>
       <div>
   <label class="fl">عدد الأقساط</label>
   <select class="fi" id="advf-mn-type" onchange="handleAdvMonths(this)">
     <option value="num">عدد محدد من الأقساط</option>
+    <option value="amount">مبلغ قسط شهري محدد</option>
     <option value="none">بلا أقساط (مرة واحدة)</option>
   </select>
   <input class="fi" id="advf-mn" type="number" placeholder="6" value="6" style="margin-top:6px"/>
+  <input class="fi" id="advf-inst-amount" type="number" placeholder="مثال: 1000" style="margin-top:6px;display:none" oninput="previewAdvInstMonths()"/>
+  <div id="advf-inst-amount-hint" style="font-size:10.5px;color:#94a3b8;margin-top:3px;display:none"></div>
 </div>
       <div><label class="fl">تاريخ الصرف</label><input class="fi" id="advf-dt" type="date"/></div>
       <div><label class="fl">السبب</label><select class="fi" id="advf-rs"><option>زواج</option><option>علاج</option><option>ظروف طارئة</option><option>تعليم</option><option>أخرى</option></select></div>
@@ -2611,8 +2628,12 @@ function calcSlip(emp){
   // البدلات الخارجية
   const allowOutCalc=allow-allowInCalc;
   const dailyBasic=basic/30;
-  // اليوم الشامل للحساب = أساسي + بدلات داخل الحساب فقط
-  const dailyGross=(basic+allowInCalc)/30;// تأمينات — مبلغ ثابت
+  // اليوم الشامل للحساب = أساسي + بدلات داخل الحساب فقط (الطريقة الحالية — زي ما هي)
+  const dailyGross=(basic+allowInCalc)/30;
+  // اليوم الشامل كله = أساسي + كل البدلات، حتى المحددة كـ"خارجية" — إضافة جديدة
+  // تُستخدم فقط لو تم اختيارها صراحةً من القواعد والإعدادات لجزاء غياب معيّن
+  const dailyGrossFull=(basic+allow)/30;
+  // تأمينات — مبلغ ثابت
   let insEmp=0;if(emp.ins==='مؤمَّن عليه'){
     const empAmt=Number(emp.insAmt)||0;insEmp=empAmt>0?empAmt:gr('ins_fixed',0);}
   // أوفرتايم — فقط لو الموظف مؤهل
@@ -2642,7 +2663,10 @@ function calcSlip(emp){
   const totalOt=otRecs.reduce((s,a)=>s+Number(a.ot||0),0);
   // حضور
   const absRecs=DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m);// غياب بإذن — من الأساسي
-  const absDays=absRecs.filter(a=>a.st==='غياب بإذن'||a.st==='غياب').length;const absPen=emp.attExempt?0:absDays*dailyGross*gr('ab_ml',1);// الغياب بإذن = شامل المرتب (مع البدلات الداخلة)// بدل الراحة — فقط لو لم يأخذ كل راحاته
+  const absDays=absRecs.filter(a=>a.st==='غياب بإذن'||a.st==='غياب').length;
+  // أساس حساب يوم الغياب بإذن — الحالي (افتراضي، زي ما كان دايمًا) أو الشامل كله لو تم اختياره صراحةً
+  const abDayVal = (DB.rules['ab_base']==='full') ? dailyGrossFull : dailyGross;
+  const absPen=emp.attExempt?0:absDays*abDayVal*gr('ab_ml',1);// الغياب بإذن = شامل المرتب (مع البدلات الداخلة)// بدل الراحة — فقط لو لم يأخذ كل راحاته
   const restDayNum2=emp.restDay!==undefined&&emp.restDay!==''?Number(emp.restDay):-1;
   let restOtDays=0;
   if(restDayNum2>=0){
@@ -2656,16 +2680,22 @@ function calcSlip(emp){
     restOtDays=(totalTaken2<entitled2)?worked2:0;
   }
   // غياب بدون إذن — من الشامل حسب القاعدة
-  const unAuthDays=absRecs.filter(a=>a.st==='غياب بدون إذن').length;let unAuthPen=0;const uMode=DB.rules['unauth_mode']||'full';const fixedAllow=Number(emp.al)||0;const dailyAllow=fixedAllow/30;// القواعد:// full = يوم شامل
+  const unAuthDays=absRecs.filter(a=>a.st==='غياب بدون إذن').length;let unAuthPen=0;const uMode=DB.rules['unauth_mode']||'full';const fixedAllow=Number(emp.al)||0;const dailyAllow=fixedAllow/30;
+  // أساس حساب "الشامل" المستخدم في كل صيغ الغياب بدون إذن تحت — الحالي
+  // (افتراضي، زي ما كان دايمًا) أو الشامل كله لو تم اختياره صراحةً؛ الصيغة
+  // والمضاعف المختارين فوق (uMode) يفضلوا زي ما هما تمامًا، ده بس بيغيّر
+  // المرتب اللي بيتحسب عليه اليوم
+  const unauthDayVal = (DB.rules['unauth_base']==='full') ? dailyGrossFull : dailyGross;
+  // القواعد:// full = يوم شامل
   // full_plus_fixed_var = يوم شامل + يوم (ثابت+متغير) = يومين شامل
   // full_plus_2fixed_var = يوم شامل + يومين (ثابت+متغير) = ثلاثة أضعاف
   // two_full = يومين على الشامل
   // full_plus_one_fixed_var = يوم شامل + يوم ثابت+متغير
   // basic = يوم أساسي فقط
   // mult = معامل × يوم شامل
-  if(uMode==='full')               unAuthPen=unAuthDays*dailyGross;else if(uMode==='full_plus_fixed_var')  unAuthPen=unAuthDays*(dailyGross + dailyGross);// يوم شامل + يوم (ث+م)
-  else if(uMode==='full_plus_2fixed_var') unAuthPen=unAuthDays*(dailyGross + dailyGross*2);// يوم شامل + يومين
-  else if(uMode==='two_full')      unAuthPen=unAuthDays*dailyGross*2;else if(uMode==='full_plus_one_fixed_var') unAuthPen=unAuthDays*(dailyGross + dailyBasic + dailyAllow);else if(uMode==='basic')         unAuthPen=unAuthDays*dailyBasic;else if(uMode==='mult')          unAuthPen=unAuthDays*dailyGross*gr('r_unauth_ml',1);else                             unAuthPen=unAuthDays*dailyGross;
+  if(uMode==='full')               unAuthPen=unAuthDays*unauthDayVal;else if(uMode==='full_plus_fixed_var')  unAuthPen=unAuthDays*(unauthDayVal + unauthDayVal);// يوم شامل + يوم (ث+م)
+  else if(uMode==='full_plus_2fixed_var') unAuthPen=unAuthDays*(unauthDayVal + unauthDayVal*2);// يوم شامل + يومين
+  else if(uMode==='two_full')      unAuthPen=unAuthDays*unauthDayVal*2;else if(uMode==='full_plus_one_fixed_var') unAuthPen=unAuthDays*(unauthDayVal + dailyBasic + dailyAllow);else if(uMode==='basic')         unAuthPen=unAuthDays*dailyBasic;else if(uMode==='mult')          unAuthPen=unAuthDays*unauthDayVal*gr('r_unauth_ml',1);else                             unAuthPen=unAuthDays*unauthDayVal;
   // الموظف المستثنى من نظام الحضور والجزاءات: لا يُحتسب عليه أي جزاء غياب
   if(emp.attExempt) unAuthPen=0;
   // التأخير المتدرج
@@ -2688,7 +2718,9 @@ function calcSlip(emp){
     latePen+=pen;
   });const pen=absPen+unAuthPen+latePen;// advInst — لو mn=0 نستخدم rem كلها (سلفة بدون أقساط)
   const advInst=DB.adv.filter(a=>a.eid===emp.id&&a.status==='نشط').reduce((s,a)=>{
-    const inst = Number(a.mn)===0 ? Number(a.rem||a.am||0) : Number(a.inst||0);
+    // القسط الشهري بيتحدّد بمقدار الرصيد المتبقي فعليًا — عشان آخر قسط ياخد
+    // الباقي بس (لو أقل من القسط العادي) بدل ما يخصم أكتر من رصيد السلفة
+    const inst = Number(a.mn)===0 ? Number(a.rem||a.am||0) : Math.min(Number(a.inst||0), Number(a.rem||0));
     return s + (isFinite(inst)?inst:0);
   },0);
   // المسحوبات — تجميع الشهر الحالي
@@ -3408,7 +3440,23 @@ function checkAdvEligibility(){
 function saveAdv(){
   const eid=document.getElementById('advf-em').value;if(!eid){toast('اختر الموظف','error');return}
   const am=Number(document.getElementById('advf-am').value);if(!am){toast('المبلغ مطلوب','error');return}
-  const advMnType=document.getElementById('advf-mn-type')?.value||'num';const mn=advMnType==='none'?0:Number(document.getElementById('advf-mn').value)||6;const a={id:uid(),eid,am,mn,inst:mn===0?Number(am):Math.ceil(Number(am)/Number(mn)),rem:Number(am),dt:document.getElementById('advf-dt').value,rs:document.getElementById('advf-rs').value,nt:document.getElementById('advf-nt').value,status:'نشط'};DB.adv.push(a);sv('adv',DB.adv);document.getElementById('adv-mo').classList.remove('open');toast('تم تسجيل السلفة','success');renderAdv();renderDash();}
+  const advMnType=document.getElementById('advf-mn-type')?.value||'num';
+  let mn, inst;
+  if(advMnType==='none'){
+    mn=0; inst=Number(am);
+  } else if(advMnType==='amount'){
+    // المستخدم حدّد مبلغ القسط الشهري بنفسه — النظام يحسب عدد الشهور
+    // اللازمة تلقائيًا (لأعلى)، وآخر شهر ياخد الباقي المتبقي بس، مش
+    // بالضرورة نفس مبلغ القسط (زي ما بيحصل فعليًا مع رصيد السلفة المتبقي)
+    const instAmt=Number(document.getElementById('advf-inst-amount')?.value)||0;
+    if(instAmt<=0){ toast('أدخل مبلغ القسط الشهري','error'); return; }
+    inst=instAmt;
+    mn=Math.ceil(Number(am)/instAmt);
+  } else {
+    mn=Number(document.getElementById('advf-mn').value)||6;
+    inst=Math.ceil(Number(am)/Number(mn));
+  }
+  const a={id:uid(),eid,am,mn,inst,rem:Number(am),dt:document.getElementById('advf-dt').value,rs:document.getElementById('advf-rs').value,nt:document.getElementById('advf-nt').value,status:'نشط'};DB.adv.push(a);sv('adv',DB.adv);document.getElementById('adv-mo').classList.remove('open');toast('تم تسجيل السلفة','success');renderAdv();renderDash();}
 function renderAdv(){
   const act=DB.adv.filter(a=>a.status==='نشط');document.getElementById('adv-tot').textContent=fc(act.reduce((s,a)=>s+Number(a.rem||0),0));document.getElementById('adv-mi').textContent=fc(act.reduce((s,a)=>s+Number(a.inst||0),0));document.getElementById('adv-cnt').textContent=act.length;document.getElementById('adv-end').textContent=act.filter(a=>Number(a.rem)<=Number(a.inst)).length;const tb=document.getElementById('adv-body');if(!DB.adv.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">credit_card</span>لا سلف</td></tr>';return}
   tb.innerHTML=DB.adv.map(a=>{
@@ -3571,12 +3619,12 @@ function exportArcCSV(arcId){
 
 // ===================== RULES =====================
 function loadRules(){
-  const def={ins_co:26,ins_fixed:0,ot_mx:120,lt_gr:15,lt_ml:1,ab_ml:1,r_tr:500,r_lv:300,r_bn:10,unauth_mode:'full',r_unauth_ml:1};const r={...def,...DB.rules};const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=r[k]});const umEl=document.getElementById('r-unauth-mode');if(umEl)umEl.value=r['unauth_mode']||'full';const umlEl=document.getElementById('r-unauth-ml');if(umlEl)umlEl.value=r['r_unauth_ml']||1;// أوفرتايم
+  const def={ins_co:26,ins_fixed:0,ot_mx:120,lt_gr:15,lt_ml:1,ab_ml:1,r_tr:500,r_lv:300,r_bn:10,unauth_mode:'full',r_unauth_ml:1};const r={...def,...DB.rules};const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=r[k]});const umEl=document.getElementById('r-unauth-mode');if(umEl)umEl.value=r['unauth_mode']||'full';const umlEl=document.getElementById('r-unauth-ml');if(umlEl)umlEl.value=r['r_unauth_ml']||1;const abBaseEl=document.getElementById('r-ab-base');if(abBaseEl)abBaseEl.value=r['ab_base']||'current';const unauthBaseEl=document.getElementById('r-unauth-base');if(unauthBaseEl)unauthBaseEl.value=r['unauth_base']||'current';// أوفرتايم
   const otHrBase=document.getElementById('r-ot-hr-base');if(otHrBase)otHrBase.value=r['ot_hr_base']||'basic';const otRgMode=document.getElementById('r-ot-rg-mode');if(otRgMode)otRgMode.value=r['ot_rg_mode']||'1.5';const otDayMode=document.getElementById('r-ot-day-mode');if(otDayMode){otDayMode.value=r['ot_day_mode']||'full_1';document.getElementById('r-ot-day-fixed-wrap').style.display=r['ot_day_mode']==='fixed'?'block':'none';}
   const otDayFixed=document.getElementById('r-ot-day-fixed');if(otDayFixed)otDayFixed.value=r['ot_day_fixed']||0;const otRestMode=document.getElementById('r-ot-rest-mode');if(otRestMode){otRestMode.value=r['ot_rest_mode']||'full_2';document.getElementById('r-ot-rest-fixed-wrap').style.display=r['ot_rest_mode']==='fixed'?'block':'none';}
   const otRestFixed=document.getElementById('r-ot-rest-fixed');if(otRestFixed)otRestFixed.value=r['ot_rest_fixed']||0;}
 function saveRules(){
-  const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};const r={};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)r[k]=el.value});const umSv=document.getElementById('r-unauth-mode');if(umSv)r['unauth_mode']=umSv.value;const umlSv=document.getElementById('r-unauth-ml');if(umlSv)r['r_unauth_ml']=umlSv.value;// أوفرتايم
+  const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};const r={};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)r[k]=el.value});const umSv=document.getElementById('r-unauth-mode');if(umSv)r['unauth_mode']=umSv.value;const umlSv=document.getElementById('r-unauth-ml');if(umlSv)r['r_unauth_ml']=umlSv.value;const abBaseSv=document.getElementById('r-ab-base');if(abBaseSv)r['ab_base']=abBaseSv.value;const unauthBaseSv=document.getElementById('r-unauth-base');if(unauthBaseSv)r['unauth_base']=unauthBaseSv.value;// أوفرتايم
   const svOtHrBase=document.getElementById('r-ot-hr-base');if(svOtHrBase)r['ot_hr_base']=svOtHrBase.value;const svOtRg=document.getElementById('r-ot-rg-mode');if(svOtRg)r['ot_rg_mode']=svOtRg.value;const svOtDay=document.getElementById('r-ot-day-mode');if(svOtDay)r['ot_day_mode']=svOtDay.value;const svOtDayF=document.getElementById('r-ot-day-fixed');if(svOtDayF)r['ot_day_fixed']=svOtDayF.value;const svOtRest=document.getElementById('r-ot-rest-mode');if(svOtRest)r['ot_rest_mode']=svOtRest.value;const svOtRestF=document.getElementById('r-ot-rest-fixed');if(svOtRestF)r['ot_rest_fixed']=svOtRestF.value;['15','30','45','60'].forEach(n=>{const ltEl=document.getElementById('r-lt-'+n+'-mode');if(ltEl)r['lt_'+n+'_mode']=ltEl.value;});DB.rules={...DB.rules,...r};sv('rules',DB.rules);toast('تم حفظ القواعد','success');}
 function loadDefRules(){DB.rules={};sv('rules',DB.rules);loadRules();toast('تمت استعادة الافتراضي','info')}
 
@@ -4971,9 +5019,35 @@ document.addEventListener('DOMContentLoaded',()=>{
     const extraNote=document.getElementById('af-extra-note');
     if(extraNote) extraNote.style.display=(attOtt.value==='day_extra')?'block':'none';
   });});function handleAdvMonths(sel){
-  const input=document.getElementById('advf-mn');if(sel.value==='none'){
-    input.style.display='none';input.value=0;} else {
-    input.style.display='block';input.value=input.value||6;}
+  const numInput=document.getElementById('advf-mn');
+  const amtInput=document.getElementById('advf-inst-amount');
+  const hint=document.getElementById('advf-inst-amount-hint');
+  if(sel.value==='none'){
+    numInput.style.display='none'; numInput.value=0;
+    amtInput.style.display='none'; hint.style.display='none';
+  } else if(sel.value==='amount'){
+    numInput.style.display='none';
+    amtInput.style.display='block'; hint.style.display='block';
+    previewAdvInstMonths();
+  } else {
+    numInput.style.display='block'; numInput.value=numInput.value||6;
+    amtInput.style.display='none'; hint.style.display='none';
+  }
+}
+
+// ===== معاينة عدد الشهور المطلوبة لو تم تحديد مبلغ القسط الشهري بدل العدد —
+// آخر شهر بياخد الباقي المتبقي بس (مش بالضرورة نفس مبلغ القسط) =====
+function previewAdvInstMonths(){
+  const hint=document.getElementById('advf-inst-amount-hint');
+  if(!hint) return;
+  const am=Number(document.getElementById('advf-am')?.value)||0;
+  const instAmt=Number(document.getElementById('advf-inst-amount')?.value)||0;
+  if(am<=0||instAmt<=0){ hint.textContent=''; return; }
+  const months=Math.ceil(am/instAmt);
+  const lastMonth=am-(instAmt*(months-1));
+  hint.textContent = months<=1
+    ? `هيتخصم شهر واحد بس بمبلغ ${fc(lastMonth)} ج.م`
+    : `هيتاخد ${months} شهور — كل شهر ${fc(instAmt)} ج.م، وآخر شهر ${fc(lastMonth)} ج.م`;
 }
 
 // ===== دوال الأزرار اللي كانت صامتة =====
