@@ -2105,22 +2105,7 @@ async function fbAutoSyncOnLogin(){
   }
 }
 
-function _fbDeepEqual(a,b){
-  if(a===b) return true;
-  if(a===null||b===null||typeof a!==typeof b) return false;
-  if(Array.isArray(a)&&Array.isArray(b)){
-    if(a.length!==b.length) return false;
-    return a.every((x,i)=>_fbDeepEqual(x,b[i]));
-  }
-  if(typeof a==='object'){
-    const ka=Object.keys(a), kb=Object.keys(b);
-    if(ka.length!==kb.length) return false;
-    return ka.every(k=>_fbDeepEqual(a[k],b[k]));
-  }
-  return false;
-}
 async function fbAutoDownloadChanges(fbTs){
-  const _nowDl = Date.now();
   const { ref, get, db } = window._fb;
   const localTs = localStorage.getItem('zz_lastSync') || '';
   
@@ -2141,7 +2126,6 @@ async function fbAutoDownloadChanges(fbTs){
   const _newLocalKeyTs = {..._localKeyTs};
 
   for(const k of FB_SYNC_KEYS){
-    if(window._fbLocalWriteTs && window._fbLocalWriteTs[k] && (_nowDl - window._fbLocalWriteTs[k]) < 15000) continue;
     // تخطي آمن — بس لو عندنا علامة موثوقة إن الجدول ده لسه زي ما هو
     if(_keyTs && _keyTs[k] && _keyTs[k].ts && _localKeyTs[k] === _keyTs[k].ts) continue;
     try{
@@ -2159,7 +2143,7 @@ async function fbAutoDownloadChanges(fbTs){
       const localCount = Array.isArray(localData) ? localData.length : (localData?1:0);
       
       // لو في فرق → خذ من Firebase
-      if(!_fbDeepEqual(fbData, localData)){
+      if(JSON.stringify(fbData) !== JSON.stringify(localData)){
         localStorage.setItem('zz_'+k, JSON.stringify(fbData));
         DB[k] = fbData;
         
@@ -2348,8 +2332,6 @@ function _svOriginal(k,d){
 // حفظ محلي فورًا + رفع Firebase في الخلفية + تحديث وقت آخر تعديل
 // (تعريف واحد بس في كل الملف — عشان منوقعش في مشكلة hoisting تاني)
 function sv(k, d){
-    window._fbLocalWriteTs = window._fbLocalWriteTs||{};
-    window._fbLocalWriteTs[k] = Date.now();
   _svOriginal(k, d);
   if(fbSyncEnabled && fbOnline && FB_SYNC_KEYS.includes(k)){
     fbPush(k, d).then(()=>fbTouchLastUpdate(k)).catch(()=>{});
@@ -2558,14 +2540,7 @@ function dismissActionTrackingIssue(issueId){
   if(!confirm('تجاهل هذا التنبيه؟ لن يظهر كـ"بانتظار المراجعة" بعد الآن.')) return;
   iss.history = iss.history || [];
   iss.history.push({from:iss.finalAction, to:'تجاهل', by:session.name||'نظام', at:new Date().toISOString()});
-  // إغلاق كل النسخ المكررة لنفس التنبيه (نفس الموظف/التاريخ/النوع)
-  DB.issues.forEach(i=>{
-    if(i.status==='بانتظار المراجعة' && (i.id===iss.id || (i.eid===iss.eid && String(i.dt)===String(iss.dt) && i.type===iss.type))){
-      i.status='تم التجاهل';
-      i.decidedBy=session.name||'نظام';
-      i.decidedAt=new Date().toISOString();
-    }
-  });
+  iss.status = 'تم التجاهل';
   iss.decidedBy = session.name||'نظام';
   iss.decidedAt = new Date().toISOString();
   sv('issues', DB.issues);
@@ -3379,16 +3354,6 @@ function saveAttEdit(attId){
   //    فيه منطقين مختلفين لنفس العملية
   if(newSt !== oldSt){
     convertAttStatus(attId, newSt);
-// ضمان إغلاق أي تنبيه مفتوح لنفس الموظف ونفس اليوم مهما كان شكل الـid
-        DB.issues.forEach(i=>{
-          if(i.eid===DB.att[idx].eid && String(i.dt)===String(DB.att[idx].dt) && i.status==='بانتظار المراجعة'){
-            i.status='تم التعديل';
-            i.finalAction=newSt;
-            i.decidedBy=session.name||'نظام';
-            i.decidedAt=new Date().toISOString();
-          }
-        });
-        sv('issues', DB.issues);
   } else {
     sv('att', DB.att);
     resolveRelatedIssue(DB.att[idx].eid, DB.att[idx].dt, newSt);
