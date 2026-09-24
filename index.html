@@ -2137,7 +2137,17 @@ async function fbAutoDownloadChanges(fbTs){
       if(_keyTs && _keyTs[k] && _keyTs[k].ts) _newLocalKeyTs[k] = _keyTs[k].ts;
       const localRaw = localStorage.getItem('zz_'+k);
       const localData = localRaw ? JSON.parse(localRaw) : null;
-      
+
+      // حماية من سباق التوقيت: لو الجهاز ده نفسه كتب في الجدول ده محليًا
+      // من ثوانٍ قليلة، منطبقش نسخة فايربيز دلوقتي حتى لو مختلفة — لأن
+      // ممكن تكون نسخة قديمة وصلت قبل ما كتابتنا نفسها تتأكد فعليًا على
+      // فايربيز، وده كان بيسبب رجوع قرارات (زي تحويل حالة يوم أو تجاهل
+      // تنبيه) لحالتها القديمة بعد ثوانٍ من الحفظ
+      const recentWriteTs = window._recentLocalWrites && window._recentLocalWrites[k];
+      if(recentWriteTs && (Date.now() - recentWriteTs) < 8000){
+        continue;
+      }
+
       // مقارنة الأحجام والبيانات
       const fbCount    = Array.isArray(fbData) ? fbData.length : 1;
       const localCount = Array.isArray(localData) ? localData.length : (localData?1:0);
@@ -2333,6 +2343,8 @@ function _svOriginal(k,d){
 // (تعريف واحد بس في كل الملف — عشان منوقعش في مشكلة hoisting تاني)
 function sv(k, d){
   _svOriginal(k, d);
+  window._recentLocalWrites = window._recentLocalWrites || {};
+  window._recentLocalWrites[k] = Date.now();
   if(fbSyncEnabled && fbOnline && FB_SYNC_KEYS.includes(k)){
     fbPush(k, d).then(()=>fbTouchLastUpdate(k)).catch(()=>{});
   }
