@@ -3085,7 +3085,7 @@ function saveAtt(){
   // ضمن دورة الراحة الأسبوعية ولا يتلخبط مع سجل حضور حقيقي لنفس اليوم
   const isExtraDay = ott==='day_extra';
   const st = isExtraDay ? 'يوم عمل إضافي' : document.getElementById('af-st').value;
-  const rec={id:uid(),eid,dt,y:Number(yr),m:Number(mn),d:Number(dy),ti:document.getElementById('af-in').value,to:document.getElementById('af-out').value,ot:Number(document.getElementById('af-ot').value||0),ott,st,nt:document.getElementById('af-nt').value,lateMin,isLate:lateMin>gr('lt_gr',15)};DB.att.push(rec);sv('att',DB.att);document.getElementById('att-mo').classList.remove('open');toast(isExtraDay?'✅ تم تسجيل يوم عمل إضافي — سيُضاف كبند في المرتب':'تم تسجيل الحضور','success');renderAtt();renderDash();}
+  const rec={id:uid(),eid,dt,y:Number(yr),m:Number(mn),d:Number(dy),ti:document.getElementById('af-in').value,to:document.getElementById('af-out').value,ot:Number(document.getElementById('af-ot').value||0),ott,st,nt:document.getElementById('af-nt').value,lateMin,isLate:lateMin>gr('lt_gr',15),editedBy:getSession()?.name||'نظام',editedAt:new Date().toISOString()};DB.att.push(rec);sv('att',DB.att);document.getElementById('att-mo').classList.remove('open');toast(isExtraDay?'✅ تم تسجيل يوم عمل إضافي — سيُضاف كبند في المرتب':'تم تسجيل الحضور','success');renderAtt();renderDash();}
 function renderAtt(){
   // تعبئة قائمة الموظفين في at-ef
   const efEl = document.getElementById('at-ef');
@@ -5889,7 +5889,7 @@ function editPastDecision(issueId, actionType){
       const used = DB.leaves.filter(l=>l.eid===iss.eid&&l.year===year&&l.status!=='ملغاة').reduce((s,l)=>s+Number(l.days||0),0);
       const bal = empLeaveBal(emp);
       if(used >= bal){ toast('رصيد الإجازات غير كافٍ','error'); return; }
-      DB.att.push({id:uid(), eid:iss.eid, dt:iss.dt, y:year, m:new Date(iss.dt).getMonth()+1, d:new Date(iss.dt).getDate(), ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'تعديل قرار سابق', isLate:false, createdAt:new Date().toISOString()});
+      DB.att.push({id:uid(), eid:iss.eid, dt:iss.dt, y:year, m:new Date(iss.dt).getMonth()+1, d:new Date(iss.dt).getDate(), ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'تعديل قرار سابق', isLate:false, createdAt:new Date().toISOString(), editedBy:session.name, editedAt:new Date().toISOString()});
       const lid = 'lv_att_'+DB.att[DB.att.length-1].id;
       DB.leaves.push({id:lid, eid:iss.eid, from:iss.dt, to:iss.dt, days:1, year, month:new Date(iss.dt).getMonth()+1, status:'معتمدة', note:'تعديل قرار من متابعة الإجراءات', reqDate:new Date().toISOString().slice(0,10), createdAt:new Date().toISOString()});
       sv('leaves', DB.leaves);
@@ -5901,7 +5901,7 @@ function editPastDecision(issueId, actionType){
     if(attRec){
       convertAttStatus(attRec.id, newStatus);
     } else {
-      DB.att.push({id:uid(), eid:iss.eid, dt:iss.dt, y:Number(iss.dt.slice(0,4)), m:Number(iss.dt.slice(5,7)), d:Number(iss.dt.slice(8,10)), ti:'', to:'', ot:0, ott:'', st:newStatus, nt:'تعديل قرار سابق', isLate:false, createdAt:new Date().toISOString()});
+      DB.att.push({id:uid(), eid:iss.eid, dt:iss.dt, y:Number(iss.dt.slice(0,4)), m:Number(iss.dt.slice(5,7)), d:Number(iss.dt.slice(8,10)), ti:'', to:'', ot:0, ott:'', st:newStatus, nt:'تعديل قرار سابق', isLate:false, createdAt:new Date().toISOString(), editedBy:session.name, editedAt:new Date().toISOString()});
       sv('att', DB.att);
     }
   }
@@ -5964,7 +5964,8 @@ function resolveAttIssue(issueId, actionType){
       id: uid(), eid: iss.eid, dt: iss.dt,
       y: year, m: new Date(iss.dt).getMonth()+1, d: new Date(iss.dt).getDate(),
       ti:'', to:'', ot:0, ott:'', st:'إجازة اعتيادية', nt:'من إشعار الغياب',
-      isLate:false, createdAt:new Date().toISOString()
+      isLate:false, createdAt:new Date().toISOString(),
+      editedBy:session.name, editedAt:new Date().toISOString()
     });
 
     const lid = 'lv_att_'+DB.att[DB.att.length-1].id;
@@ -5984,7 +5985,8 @@ function resolveAttIssue(issueId, actionType){
       id: uid(), eid: iss.eid, dt: iss.dt,
       y: Number(iss.dt.slice(0,4)), m: Number(iss.dt.slice(5,7)), d: Number(iss.dt.slice(8,10)),
       ti:'', to:'', ot:0, ott:'', st:newStatus, nt:'من إشعار الغياب',
-      isLate:false, createdAt:new Date().toISOString()
+      isLate:false, createdAt:new Date().toISOString(),
+      editedBy:session.name, editedAt:new Date().toISOString()
     });
   }
 
@@ -7722,7 +7724,9 @@ function savePayrollDayEdit(eid, dt){
       ti:'', to:'', ot:0, ott:'', st:newStatus, nt:note,
       isLate:false,
       addedBy:getSession()?.name||'نظام',
-      addedAt:new Date().toISOString()
+      addedAt:new Date().toISOString(),
+      editedBy:getSession()?.name||'نظام',
+      editedAt:new Date().toISOString()
     });
     sv('att',DB.att);
     resolveRelatedIssue(eid, dt, newStatus);
