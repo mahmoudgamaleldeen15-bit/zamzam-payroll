@@ -2133,8 +2133,6 @@ async function fbAutoDownloadChanges(fbTs){
       if(!snap.exists()) continue;
       
       const fbData  = snap.val();
-      // نسجّل إننا شفنا آخر نسخة من الجدول ده دلوقتي — سواء اتغيرت أو لأ
-      if(_keyTs && _keyTs[k] && _keyTs[k].ts) _newLocalKeyTs[k] = _keyTs[k].ts;
       const localRaw = localStorage.getItem('zz_'+k);
       const localData = localRaw ? JSON.parse(localRaw) : null;
 
@@ -2145,8 +2143,16 @@ async function fbAutoDownloadChanges(fbTs){
       // تنبيه) لحالتها القديمة بعد ثوانٍ من الحفظ
       const recentWriteTs = window._recentLocalWrites && window._recentLocalWrites[k];
       if(recentWriteTs && (Date.now() - recentWriteTs) < 8000){
+        // لسه في رفعة محلية حديثة لنفس الجدول لم نتأكد إنها انعكست على
+        // فايربيز فعليًا — منسجلش "شفنا آخر نسخة" هنا عشان لو الرفعة دي
+        // فشلت أو اتأخرت، نتحقق تاني صح في المرة الجاية بدل ما نفتكر
+        // غلط إننا بالفعل متزامنين مع نسخة فايربيز القديمة
         continue;
       }
+
+      // وصلنا هنا يبقى مفيش رفعة محلية حديثة قيد التنفيذ لنفس الجدول —
+      // نسجّل إننا شفنا آخر نسخة موثوقة من الجدول ده دلوقتي (سواء اتغيرت أو لأ)
+      if(_keyTs && _keyTs[k] && _keyTs[k].ts) _newLocalKeyTs[k] = _keyTs[k].ts;
 
       // مقارنة الأحجام والبيانات
       const fbCount    = Array.isArray(fbData) ? fbData.length : 1;
@@ -2341,12 +2347,31 @@ function _svOriginal(k,d){
 // sv الموحّدة — الدالة الوحيدة المستخدمة في كل البرنامج:
 // حفظ محلي فورًا + رفع Firebase في الخلفية + تحديث وقت آخر تعديل
 // (تعريف واحد بس في كل الملف — عشان منوقعش في مشكلة hoisting تاني)
+window._fbWriteSeq = window._fbWriteSeq || {};
 function sv(k, d){
   _svOriginal(k, d);
   window._recentLocalWrites = window._recentLocalWrites || {};
   window._recentLocalWrites[k] = Date.now();
   if(fbSyncEnabled && fbOnline && FB_SYNC_KEYS.includes(k)){
-    fbPush(k, d).then(()=>fbTouchLastUpdate(k)).catch(()=>{});
+    // رقم تسلسلي لكل رفعة لنفس الجدول — بيحل مشكلة "رجوع القرار بعد
+    // التحديث اللحظي": لو حصلت رفعتان متتاليتان لنفس الجدول (زي تحويل
+    // حالة حضور متبوع فورًا بفحص متابعة إجراءات بيحفظ برضه)، كنا بنحدّث
+    // "علامة آخر تعديل" في فايربيز بمجرد ما أي رفعة تخلص، حتى لو كانت
+    // رفعة قديمة اتأخرت في الشبكة ورجعت بعد رفعة أحدث منها — وده كان بيخلي
+    // أي جهاز (حتى نفس الجهاز بعد شوية) يفتكر إن في تحديث جديد ويجيب
+    // نسخة فايربيز، اللي ممكن تكون لسه معندهاش آخر قرار فعليًا. دلوقتي
+    // بس آخر رفعة اتبعتت لنفس الجدول هي اللي تحدّث العلامة، وبس لو
+    // الرفعة نجحت فعلاً ووصلت فايربيز (مش لو فشلت بصمت)
+    window._fbWriteSeq[k] = (window._fbWriteSeq[k] || 0) + 1;
+    const mySeq = window._fbWriteSeq[k];
+    fbPush(k, d).then(ok=>{
+      if(ok && window._fbWriteSeq[k] === mySeq){
+        // نجدّد وقت "آخر كتابة محلية" هنا كمان — لحد ما العلامة توصل
+        // فايربيز فعليًا ويرجع صداها، نفس الجدول يفضل محمي من التحديث اللحظي
+        window._recentLocalWrites[k] = Date.now();
+        return fbTouchLastUpdate(k);
+      }
+    }).catch(()=>{});
   }
 }
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
@@ -4219,6 +4244,44 @@ function renderReceipts(){
   reportData = emps;
 }
 
+// ===== جدول إثبات الحضور اليومي داخل إيصال الطباعة =====
+// مربع فارغ لكل يوم في الشهر (28/29/30/31 حسب الشهر فعليًا)، يعلّم عليه
+// المحاسب يدويًا. يوم الراحة الأسبوعي المسجّل في كارت الموظف يتميّز بلون
+// مختلف فقط للعِلم — من غير ما يتحط عليه علامة حضور تلقائية أبدًا.
+// نفس الدالة بتستخدم في وضع طباعة موظف واحد وفي وضع طباعة كل الموظفين
+// معًا (الاتنين بينادوا buildReceiptCard لكل موظف)
+function buildAttendanceCheckGrid(emp){
+  const y = DB.cycle.y, m = DB.cycle.m;
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const restDayNum = (emp.restDay!==undefined && emp.restDay!==null && String(emp.restDay).trim()!=='')
+    ? Number(emp.restDay) : -1;
+
+  let cells = '';
+  for(let d=1; d<=daysInMonth; d++){
+    const dow = new Date(y, m-1, d).getDay();
+    const isRest = restDayNum>=0 && dow===restDayNum;
+    cells += `
+      <div style="text-align:center;border:1px solid ${isRest?'#93c5fd':'#e2eaf6'};border-radius:5px;padding:3px 1px;background:${isRest?'#dbeafe':'#fff'}">
+        <div style="font-size:8.5px;font-weight:700;color:${isRest?'#1d4ed8':'#4a5982'}">${d}</div>
+        <div style="font-size:12px;line-height:1;color:#94a3b8;margin-top:1px">☐</div>
+      </div>`;
+  }
+
+  return `
+    <div style="margin-top:14px;padding-top:10px;border-top:1px dashed #e2eaf6">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px">
+        <span style="font-size:11px;font-weight:800;color:#0f2057">إثبات الحضور اليومي (${daysInMonth} يوم)</span>
+        <span style="display:flex;align-items:center;gap:12px">
+          <span style="display:flex;align-items:center;gap:4px;font-size:9px;color:#4a5982"><span style="width:9px;height:9px;border-radius:2px;background:#fff;border:1px solid #cbd5e1;display:inline-block"></span>يوم عمل</span>
+          <span style="display:flex;align-items:center;gap:4px;font-size:9px;color:#4a5982"><span style="width:9px;height:9px;border-radius:2px;background:#dbeafe;border:1px solid #93c5fd;display:inline-block"></span>يوم الراحة الأسبوعي</span>
+        </span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(24px,1fr));gap:3px">
+        ${cells}
+      </div>
+    </div>`;
+}
+
 // ===== بناء إيصال راتب واحد =====
 // الحقول اللي كانت لها قيم حقيقية (الأساسي، البدلات، التأمينات، السلفة) تفضل محسوبة زي ما هي.
 // باقي الحقول (ساعات إضافية، يوم إضافي، غياب، خصم نقدي، المسحوبات، الإجمالي، الصافي) نقاط فاضية
@@ -4368,6 +4431,8 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected){
           </div>
         </div>
 
+        ${buildAttendanceCheckGrid(emp)}
+
         <!-- الصافي + التوقيع -->
         <div style="margin-top:14px;border-top:2px dashed #e2eaf6;padding-top:12px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px">
           <div style="background:#fff;border:1.5px dashed #0f2057;border-radius:9px;padding:11px;text-align:center">
@@ -4399,7 +4464,15 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected){
       #print-section, #print-section *,
       #payslip-print-section, #payslip-print-section *,
       #receipts-preview, #receipts-preview * { visibility:visible !important;}
-      #receipts-preview { position:fixed;top:0;right:0;width:100%;}
+      /* مهم: position:fixed هنا كانت هي سبب طباعة موظف واحد بس عند اختيار
+         "كل الموظفين" — المتصفح (خصوصًا Chrome) بيثبّت العنصر position:fixed
+         على الصفحة الأولى بس من الطباعة ومش بيكرره أو يكمله في باقي الصفحات،
+         فكل إيصالات الموظفين اللي بعد الأول كانت بتتقطع ومتطبعش. الحل:
+         نخلي #receipts-preview جزء طبيعي من تدفق الصفحة (static) عشان
+         تقسيم الصفحات (page-break-after) يشتغل صح لكل موظف في صفحة لوحده */
+      html, body { height:auto !important; }
+      #receipts-preview { position:static !important; width:100%; margin:0; padding:0; }
+      #print-section { position:static !important; }
       .receipt-card { page-break-after:always;border:none !important;border-radius:0 !important;}
       #sb-toggle, header { display:none !important;}
     }
