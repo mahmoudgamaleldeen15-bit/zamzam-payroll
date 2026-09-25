@@ -4459,6 +4459,15 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected){
   const filterEid = document.getElementById('print-emp-sel')?.value || 'all';renderReceipts();// إضافة CSS للطباعة
   document.getElementById('print-style-temp')?.remove();
   const style = document.createElement('style');style.id = 'print-style-temp';style.textContent = `
+    /* ===== ضبط مقاس الورقة A4 فعليًا — من غير القاعدة دي المتصفح كان بيطبع
+       بمقاس افتراضي (مش بالضرورة A4) وبهوامش افتراضية غير متحكم فيها، وده
+       كان سبب رئيسي في إن كارت الموظف يطلع مرحّل عن حدود الورقة أو يتقطع
+       على صفحة تانية. الهامش هنا (8mm) هو اللي بيحدد المساحة القابلة للطباعة
+       فعليًا، والكارت اتظبط عشان يملاها بالظبط من غير ما يخرج عنها ===== */
+    @page {
+      size: A4;
+      margin: 8mm;
+    }
     @media print {
       body * { visibility:hidden !important;}
       #print-section, #print-section *,
@@ -4470,10 +4479,36 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected){
          فكل إيصالات الموظفين اللي بعد الأول كانت بتتقطع ومتطبعش. الحل:
          نخلي #receipts-preview جزء طبيعي من تدفق الصفحة (static) عشان
          تقسيم الصفحات (page-break-after) يشتغل صح لكل موظف في صفحة لوحده */
-      html, body { height:auto !important; }
-      #receipts-preview { position:static !important; width:100%; margin:0; padding:0; }
+      html, body { height:auto !important; margin:0 !important; padding:0 !important; }
+      /* لازم إخفاء بالـ display:none (مش بس visibility) لعناصر تاب كشف
+         المرتبات التانية (العنوان، بطاقات الإجمالي، صندوق المعادلة، شريط
+         التابات) — كانت لسه محتلة مساحة فعلية في الصفحة (رغم إنها غير مرئية)
+         وده كان بيولّد صفحة فاضية زيادة قبل أول إيصال فعلي، وبيخلي باقي
+         الإيصالات تتزحزح لصفحات غلط */
+      #page-payroll > *:not(#print-section) { display:none !important; }
+      #receipts-preview { position:static !important; width:100% !important; margin:0 !important; padding:0 !important; }
       #print-section { position:static !important; }
-      .receipt-card { page-break-after:always;border:none !important;border-radius:0 !important;}
+      #print-section > div:first-child { display:none !important; } /* شريط الاختيار وزر الطباعة نفسه ميتطبعش */
+
+      /* الكارت نفسه: يملأ بالظبط المساحة القابلة للطباعة داخل A4 (210mm
+         ناقص هامشين 8mm = 194mm)، بدون أي هامش أو عرض إضافي يخرجه عن الورقة،
+         ومنمنعش تقسيمه على أكتر من صفحة لو أمكن يتحط كامل في صفحة واحدة */
+      .receipt-card {
+        page-break-after: always !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        width: 194mm !important;
+        max-width: 194mm !important;
+        min-width: 0 !important;
+        margin: 0 auto !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        color-adjust: exact !important;
+      }
+      .receipt-card:last-child { page-break-after: auto !important; }
       #sb-toggle, header { display:none !important;}
     }
   `;document.head.appendChild(style);
