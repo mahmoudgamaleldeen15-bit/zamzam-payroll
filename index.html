@@ -2892,24 +2892,25 @@ function calcSlip(emp){
   const otHrBase = DB.rules['ot_hr_base']||'basic';
   const hrRate = otHrBase==='basic_allow' ? (basic+allowInCalc)/30/8 : dailyBasic/8;
   const dayRate=(basic+allowInCalc)/30;
-  let otVal=0, otDetails=[];
+  let otVal=0, otDetails=[], otHourVal=0;
   otRecs.forEach(a=>{
-    const qty=Number(a.ot)||0;const ott=a.ott||'hour_normal';let val=0,label='';if(ott==='hour_normal'||ott==='عادي (1.5×)'){
+    const qty=Number(a.ot)||0;const ott=a.ott||'hour_normal';let val=0,label='';const isDayType=(ott==='day_extra'||ott==='يوم إضافي'||ott==='day_rest'||ott==='عطلة (2×)'||ott==='يوم راحة');if(ott==='hour_normal'||ott==='عادي (1.5×)'){
       const mul=Number(DB.rules['ot_rg_mode']||1.5);val=qty*hrRate*mul;label=`${qty}س × ${mul}`;} else if(ott==='hour_one'||ott==='ساعة × 1'){
       val=qty*hrRate*1;label=`${qty}س × 1`;} else if(ott==='day_extra'||ott==='يوم إضافي'){
       const mode=DB.rules['ot_day_mode']||'full_1';const fixed=Number(DB.rules['ot_day_fixed']||0);if(mode==='full_1.5') val=qty*dayRate*1.5;else if(mode==='fixed') val=qty*dayRate+fixed;else val=qty*dayRate*1;label=`${qty} يوم إضافي`;} else if(ott==='day_rest'||ott==='عطلة (2×)'||ott==='يوم راحة'){
       const mode=DB.rules['ot_rest_mode']||'full_2';const fixed=Number(DB.rules['ot_rest_fixed']||0);if(mode==='full_1') val=qty*dayRate*1;else if(mode==='fixed') val=qty*dayRate+fixed;else val=qty*dayRate*2;label=`${qty} يوم راحة`;}
-    otVal+=val;otDetails.push({label,val});});
+    otVal+=val;otDetails.push({label,val});if(!isDayType) otHourVal+=val;});
   const hr=hrRate;
   const totalOt=otRecs.reduce((s,a)=>s+Number(a.ot||0),0);
-  // ===== خصم الانصراف المبكر من رصيد الأوفرتايم المستحق =====
-  // otRecs/otDetails/totalOt فوق فضلوا زي ما هما بالظبط (القائمة الإجمالية
-  // الخام لكل سجلات الأوفرتايم الفعلية) — الخصم هنا بيتطبق بعد كده على
-  // otVal فقط، وبيوصف بعنوانه في بند منفصل في تفاصيل المرتب، حسب اختيار
-  // المستخدم الصريح (بسعر الساعة العادي ×1، مايتعداش قيمة الأوفرتايم نفسها)
+  // ===== خصم الانصراف المبكر — بند مستقل ضمن الاستقطاعات (مش تخفيض داخل
+  // otVal نفسه) — عشان: (أ) otVal/otDetails/totalOt فوق يفضلوا القيمة
+  // الخام الكاملة لكل سجلات الأوفرتايم بالظبط زي قواعد الحساب الأصلية
+  // بدون أي لمسة، و(ب) الخصم ميقدرش يوصل خالص لقيمة الأيام الإضافية
+  // (day_extra/day_rest) لأنها سجلات إدارية يدوية مستقلة عن ساعات
+  // الحضور والانصراف ولازم تفضل غير متأثرة تمامًا — الخصم محدود بحد
+  // أقصى = otHourVal (قيمة الأوفرتايم بالساعة فقط، بدون الأيام الإضافية)
   const earlyDepHours = calcEarlyDepartureHours(emp);
-  const earlyDepVal = earlyDepHours>0 ? earlyDepHours*hrRate : 0;
-  if(earlyDepVal>0) otVal = Math.max(0, otVal - earlyDepVal);
+  const earlyDepVal = earlyDepHours>0 ? Math.min(earlyDepHours*hrRate, otHourVal) : 0;
   // حضور
   const absRecs=DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m);// غياب بإذن — من الأساسي
   const absDays=absRecs.filter(a=>a.st==='غياب بإذن'||a.st==='غياب').length;
@@ -2973,7 +2974,7 @@ function calcSlip(emp){
     return s + (isFinite(inst)?inst:0);
   },0);
   // المسحوبات — تجميع الشهر الحالي
-  const drawsTotal=DB.draws.filter(d=>d.eid===emp.id&&Number(d.y)===DB.cycle.y&&Number(d.m)===DB.cycle.m).reduce((s,d)=>s+Number(d.am||0),0);const gross=basic+allow+otVal,deduct=insEmp+pen+advInst+drawsTotal;
+  const drawsTotal=DB.draws.filter(d=>d.eid===emp.id&&Number(d.y)===DB.cycle.y&&Number(d.m)===DB.cycle.m).reduce((s,d)=>s+Number(d.am||0),0);const gross=basic+allow+otVal,deduct=insEmp+pen+advInst+drawsTotal+earlyDepVal;
   const rawNet=Math.max(0,gross-deduct);
   const net=roundNetSalary(rawNet);
   return{basic,allow,allowInCalc,allowOutCalc,otVal,otHrs:totalOt,otDetails,earlyDepHours,earlyDepVal,gross,insEmp,absPen,unAuthPen,unAuthDays,latePen,lateCount:lateRecs.length,pen,advInst,drawsTotal,deduct,net,rawNet};}
@@ -6766,11 +6767,26 @@ function openPaySlip(eid){
   // تفاصيل الأوفرتايم — لازم نفس دالة calcSlip بالظبط (buildAccurateOtRecs)
   // عشان تفضل مطابقة تمامًا لقيم p.otDetails بالترتيب والعدد
   const otRecs = buildAccurateOtRecs(e);
+  const isDayOtType = (ott)=> ott==='day_extra'||ott==='يوم إضافي'||ott==='day_rest'||ott==='عطلة (2×)'||ott==='يوم راحة';
+  // تقسيم سجلات الأوفرتايم لعرضها في قسمين منفصلين (ساعات / أيام إضافية)
+  // — بنفس الترتيب والقيم بالظبط اللي calcSlip حسبها (p.otDetails[i])، من
+  // غير ما نعيد حساب أي قيمة هنا؛ ده تقسيم للعرض فقط
+  const otPairs = otRecs.map((r,i)=>({r, val:Number(p.otDetails?.[i]?.val||0)}));
+  const otHourPairs = otPairs.filter(x=>!isDayOtType(x.r.ott||'hour_normal'));
+  const otDayPairs = otPairs.filter(x=>isDayOtType(x.r.ott||'hour_normal'));
+  const otHourHrsSum = otHourPairs.reduce((s,x)=>s+Number(x.r.ot||0),0);
+  const otHourValSum = otHourPairs.reduce((s,x)=>s+x.val,0);
+  const otDayCountSum = otDayPairs.reduce((s,x)=>s+Number(x.r.ot||0),0);
+  const otDayValSum = otDayPairs.reduce((s,x)=>s+x.val,0);
 
-  // تفاصيل الجزاءات
+  // تفاصيل الجزاءات — نفس فلاتر calcSlip بالضبط (absDays بتاعها بتحسب حالة
+  // "غياب" المجردة برضه، مش بس "غياب بإذن" — لازم يفضلوا مطابقين تمامًا
+  // عشان القوائم المعروضة هنا تعكس بالظبط نفس السجلات اللي بُني عليها absPen)
   const absRecs = DB.att.filter(a=>a.eid===eid&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m);
-  const absAuth = absRecs.filter(a=>a.st==='غياب بإذن').length;
-  const absUnauth = absRecs.filter(a=>a.st==='غياب بدون إذن').length;
+  const absAuthRecs = absRecs.filter(a=>a.st==='غياب بإذن'||a.st==='غياب');
+  const absUnauthRecs = absRecs.filter(a=>a.st==='غياب بدون إذن');
+  const absAuthPerDay = absAuthRecs.length>0 ? p.absPen/absAuthRecs.length : 0;
+  const absUnauthPerDay = absUnauthRecs.length>0 ? p.unAuthPen/absUnauthRecs.length : 0;
   const lateRecs = { length: p.lateCount||0 }; // نفس الرقم بالظبط اللي calcSlip استخدمه في الخصم (بيراعي السماح الخاص والاستبعاد الكامل لكل موظف)
   const dailyB = (Number(e.bs)||0)/30;
 
@@ -6779,6 +6795,14 @@ function openPaySlip(eid){
 
   // تفاصيل المسحوبات
   const draws = DB.draws.filter(d=>d.eid===eid&&Number(d.y)===DB.cycle.y&&Number(d.m)===DB.cycle.m);
+
+  // صف "إجمالي فئة" فرعي — يُعرض تحت كل فئة استحقاق/استقطاع فيها أكتر من
+  // بند واحد، عشان المحاسب يشوف مجموع الفئة بوضوح قبل الإجمالي الكلي
+  const subRow = (label, val, color='#0d1b3e')=>`
+        <div style="display:flex;justify-content:space-between;padding:4px 12px 8px 20px">
+          <span style="font-size:10.5px;color:${color};font-weight:700">↳ ${label}</span>
+          <span style="font-size:11px;color:${color};font-weight:800">${fc(val)} ج.م</span>
+        </div>`;
 
   // إنشاء الـ Modal
   const existing = document.getElementById('payslip-detail-mo');
@@ -6823,25 +6847,44 @@ function openPaySlip(eid){
           <span style="font-size:12.5px;font-weight:700;color:#0ea5a0">${fc(e.al)} ج.م</span>
         </div>`:''}
 
-        <!-- الأوفرتايم -->
-        ${otRecs.length>0?`
+        <!-- إجمالي المرتب (الأساسي + البدلات) -->
+        <div style="display:flex;justify-content:space-between;padding:7px 12px;margin-bottom:4px">
+          <span style="font-size:11.5px;font-weight:800;color:#0f2057">إجمالي المرتب</span>
+          <span style="font-size:12px;font-weight:800;color:#0f2057">${fc(p.basic+p.allow)} ج.م</span>
+        </div>
+
+        <!-- الأوفرتايم (بالساعة) -->
+        ${otHourPairs.length>0?`
         <div style="margin:8px 0 4px;font-size:10.5px;font-weight:700;color:#1e3a8a">الأوفرتايم</div>
-        ${otRecs.map((r,i)=>{
+        ${otHourPairs.map(({r,val})=>{
           // تسمية النوع تُبنى دائمًا من القاعدة الحالية في الإعدادات — مش من نص قديم
           // كان محفوظ في السجل وقت إنشائه (عشان القاعدة تفضل هي المصدر الوحيد للحقيقة)
-          const isNormalHour = r.ott==='hour_normal'||r.ott==='عادي (1.5×)'||!r.ott||r.ott==='';
           const curMul = Number(DB.rules['ot_rg_mode']||1.5);
-          const typeLabel = isNormalHour ? `عادي (×${curMul})` : (r.ott==='hour_one'||r.ott==='ساعة × 1') ? 'ساعة × 1' : (r.ott==='day_extra'||r.ott==='يوم إضافي') ? 'يوم إضافي' : (r.ott==='day_rest'||r.ott==='يوم راحة'||r.ott==='عطلة (2×)') ? 'يوم راحة' : (r.ott||'عادي');
+          const typeLabel = (r.ott==='hour_one'||r.ott==='ساعة × 1') ? 'ساعة × 1' : `عادي (×${curMul})`;
           return `
         <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #f0f4fc">
-          <span style="font-size:12px;color:#1e3a8a">${r.dt||'—'} — ${typeLabel} (${r.ot} ${r.ott?.includes('يوم')?'يوم':'س'})</span>
-          <span style="font-size:12.5px;font-weight:700;color:#1e3a8a">${fc(p.otDetails?.[i]?.val||0)} ج.م</span>
+          <span style="font-size:12px;color:#1e3a8a">${r.dt||'—'} — ${typeLabel} (${r.ot} س)</span>
+          <span style="font-size:12.5px;font-weight:700;color:#1e3a8a">${fc(val)} ج.م</span>
         </div>`;
-        }).join('')}`:p.otVal>0?`
+        }).join('')}
+        ${subRow(`إجمالي ساعات الأوفرتايم: ${otHourHrsSum.toFixed(2)} س`, otHourValSum, '#1e3a8a')}`:p.otVal>0&&otDayPairs.length===0?`
         <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #f0f4fc">
           <span style="font-size:12px;color:#1e3a8a">الأوفرتايم (${p.otHrs.toFixed(1)} س)</span>
           <span style="font-size:12.5px;font-weight:700;color:#1e3a8a">${fc(p.otVal)} ج.م</span>
         </div>`:''}
+
+        <!-- الأيام الإضافية -->
+        ${otDayPairs.length>0?`
+        <div style="margin:8px 0 4px;font-size:10.5px;font-weight:700;color:#7c3aed">الأيام الإضافية</div>
+        ${otDayPairs.map(({r,val})=>{
+          const typeLabel = isDayOtType(r.ott) && (r.ott==='day_rest'||r.ott==='يوم راحة'||r.ott==='عطلة (2×)') ? 'يوم راحة' : 'يوم إضافي';
+          return `
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #f0f4fc">
+          <span style="font-size:12px;color:#7c3aed">${typeLabel} — ${r.dt||'—'}</span>
+          <span style="font-size:12.5px;font-weight:700;color:#7c3aed">${fc(val)} ج.م</span>
+        </div>`;
+        }).join('')}
+        ${subRow(`إجمالي الأيام الإضافية: ${otDayCountSum} يوم`, otDayValSum, '#7c3aed')}`:''}
 
         <!-- إجمالي الاستحقاقات -->
         <div style="display:flex;justify-content:space-between;padding:10px 12px;background:#f0fdf4;border-radius:9px;margin:10px 0 18px;border:1.5px solid #86efac">
@@ -6860,18 +6903,24 @@ function openPaySlip(eid){
         </div>`:''}
 
         <!-- غياب بإذن -->
-        ${absAuth>0?`
-        <div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #f0f4fc">
-          <span style="font-size:12px;color:#d97706;font-weight:600">غياب بإذن (${absAuth} يوم × ${fc(Math.round(dailyB))} ج.م)</span>
-          <span style="font-size:12.5px;font-weight:700;color:#d97706">${fc(p.absPen)} ج.م</span>
-        </div>`:''}
+        ${absAuthRecs.length>0?`
+        <div style="margin:2px 0 2px;font-size:10.5px;font-weight:700;color:#d97706">غياب بإذن</div>
+        ${absAuthRecs.map(a=>`
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #f0f4fc">
+          <span style="font-size:12px;color:#d97706">${a.dt||'—'} — غياب بإذن</span>
+          <span style="font-size:12.5px;font-weight:700;color:#d97706">${fc(absAuthPerDay)} ج.م</span>
+        </div>`).join('')}
+        ${subRow(`إجمالي غياب بإذن: ${absAuthRecs.length} يوم`, p.absPen, '#d97706')}`:''}
 
         <!-- غياب بدون إذن -->
-        ${absUnauth>0?`
-        <div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #f0f4fc">
-          <span style="font-size:12px;color:#e03131;font-weight:600">غياب بدون إذن (${absUnauth} يوم)</span>
-          <span style="font-size:12.5px;font-weight:700;color:#e03131">${fc(p.unAuthPen)} ج.م</span>
-        </div>`:''}
+        ${absUnauthRecs.length>0?`
+        <div style="margin:8px 0 2px;font-size:10.5px;font-weight:700;color:#e03131">غياب بدون إذن</div>
+        ${absUnauthRecs.map(a=>`
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #f0f4fc">
+          <span style="font-size:12px;color:#e03131">${a.dt||'—'} — غياب بدون إذن</span>
+          <span style="font-size:12.5px;font-weight:700;color:#e03131">${fc(absUnauthPerDay)} ج.م</span>
+        </div>`).join('')}
+        ${subRow(`إجمالي غياب بدون إذن: ${absUnauthRecs.length} يوم`, p.unAuthPen, '#e03131')}`:''}
 
         <!-- التأخيرات -->
         ${lateRecs.length>0?`
@@ -6881,30 +6930,39 @@ function openPaySlip(eid){
         </div>`:''}
 
         <!-- خصم الانصراف المبكر -->
-        ${p.earlyDepHours>0?`
+        ${p.earlyDepVal>0?`
         <div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #f0f4fc">
           <span style="font-size:12px;color:#ea580c;font-weight:600">خصم انصراف مبكر (${p.earlyDepHours.toFixed(2)} س × 1)</span>
           <span style="font-size:12.5px;font-weight:700;color:#ea580c">${fc(p.earlyDepVal)} ج.م</span>
         </div>`:''}
 
         <!-- السلف -->
+        ${advs.length>0?`
+        <div style="margin:8px 0 2px;font-size:10.5px;font-weight:700;color:#7c3aed">خصومات السلف</div>
         ${advs.map(a=>`
-        <div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #f0f4fc">
-          <span style="font-size:12px;color:#7c3aed;font-weight:600">قسط سلفة${a.rs?' ('+a.rs+')':''}</span>
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #f0f4fc">
+          <span style="font-size:12px;color:#7c3aed">قسط سلفة${a.rs?' ('+a.rs+')':''}</span>
           <span style="font-size:12.5px;font-weight:700;color:#7c3aed">${fc(Number(a.mn)===0?Number(a.rem||a.am||0):Number(a.inst||0))} ج.م</span>
         </div>`).join('')}
+        ${subRow('إجمالي خصومات السلف', p.advInst, '#7c3aed')}`:''}
 
         <!-- المسحوبات -->
+        ${draws.length>0?`
+        <div style="margin:8px 0 2px;font-size:10.5px;font-weight:700;color:#e03131">المسحوبات</div>
         ${draws.map(d=>`
-        <div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #f0f4fc;background:#fff5f5">
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #f0f4fc;background:#fff5f5">
           <span style="font-size:12px;color:#e03131;font-weight:600">💳 ${d.desc||'مسحوب'} ${d.dt?'('+d.dt+')':''}</span>
           <span style="font-size:12.5px;font-weight:700;color:#e03131">${fc(d.am)} ج.م</span>
         </div>`).join('')}
+        ${subRow('إجمالي المسحوبات', p.drawsTotal, '#e03131')}`:''}
 
-        <!-- إجمالي الاستقطاعات -->
+        <!-- إجمالي الاستقطاعات — مُحسّب مباشرة من مجموع كل فئات الاستقطاع
+             المعروضة فوق (بدل الاعتماد على حقل منفصل)، عشان يفضل دايمًا
+             مطابق تمامًا لما هو ظاهر للمحاسب، ومايظهرش صفر أبدًا لو فيه
+             استقطاعات فعلية -->
         <div style="display:flex;justify-content:space-between;padding:10px 12px;background:#fff0f0;border-radius:9px;margin:10px 0 18px;border:1.5px solid #fca5a5">
           <span style="font-size:13px;font-weight:800;color:#e03131">إجمالي الاستقطاعات</span>
-          <span style="font-size:14px;font-weight:800;color:#e03131">${isFinite(p.deduct)?fc(p.deduct):'—'} ج.م</span>
+          <span style="font-size:14px;font-weight:800;color:#e03131">${fc(p.insEmp+p.absPen+p.unAuthPen+p.latePen+p.earlyDepVal+p.advInst+p.drawsTotal)} ج.م</span>
         </div>
 
         <!-- ===== الصافي ===== -->
