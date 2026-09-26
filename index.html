@@ -2743,8 +2743,26 @@ function calcShiftOTBalance(eid, dt){
     }
   });
 
-  const requiredMins = 510; // 8 ساعات و30 دقيقة
-  const balanceMins = totalMins - requiredMins;
+  // === عتبتان مستقلتان تمامًا عن بعض — بدون أي ربط بينهما ===
+  // الأوفرتايم: يبدأ بعد 8 ساعات و30 دقيقة (510 د) — نفس عتبة calcShiftOT
+  // بالظبط، من غير أي تغيير خالص (زي ما هي دايمًا)
+  const OVERTIME_THRESHOLD = 510;
+  // الانصراف المبكر: أساسه 8 ساعات عمل فعلية بالظبط (480 د) — عتبة مستقلة
+  // تمامًا عن عتبة الأوفرتايم، حسب طلب المستخدم الصريح (كان بيُحسب غلط
+  // بنفس عتبة الـ8:30 قبل كده، فكان بيظهر "انصراف مبكر" لموظف شغل فعليًا
+  // 8 ساعات أو أكتر بشوية زي 8:05)
+  const EARLY_DEPARTURE_THRESHOLD = 480;
+
+  let balanceMins;
+  if(totalMins >= OVERTIME_THRESHOLD){
+    balanceMins = totalMins - OVERTIME_THRESHOLD; // أوفرتايم (موجب) — Logic زي ما هو
+  } else if(totalMins < EARLY_DEPARTURE_THRESHOLD){
+    balanceMins = totalMins - EARLY_DEPARTURE_THRESHOLD; // انصراف مبكر (سالب)
+  } else {
+    balanceMins = 0; // بين 8:00 و8:30 بالظبط — لا انصراف مبكر ولا أوفرتايم
+  }
+
+  const requiredMins = EARLY_DEPARTURE_THRESHOLD; // إعلامي فقط — العمود بيستخدم balanceMins بس
   return { totalMins, requiredMins, balanceMins };
 }
 
@@ -2771,9 +2789,26 @@ function accurateOtHoursFor(a, seenDays){
   }
   return Number(a.ot||0);
 }
+// ===== نفس منطق accurateOtHoursFor بالظبط، إلا إن الأيام اللي تحت حد
+// الانصراف المبكر (calcShiftOTBalance بالسالب) بترجع بقيمتها السالبة
+// (بدل الصفر) — عشان "إجمالي ساعات الأوفرتايم الشهري" يتقلل فعليًا بقيمة
+// أيام الانصراف المبكر، حسب طلب المستخدم الصريح. مُستخدمة فقط في الإجمالي
+// الشهري وتقرير الحضور (مش في كشف المرتبات — accurateOtHoursFor الأصلية
+// فضلت زي ما هي هناك، والخصم بتاعها بند منفصل واضح في تفاصيل المرتب)
+function netOtHoursFor(a, seenDays){
+  if(isNormalHourOT(a) && a.ti && a.to){
+    const key = a.eid+'|'+a.dt;
+    if(seenDays.has(key)) return 0;
+    seenDays.add(key);
+    const wb = (typeof calcShiftOTBalance==='function') ? calcShiftOTBalance(a.eid, a.dt) : null;
+    return wb ? wb.balanceMins/60 : 0; // موجب = أوفرتايم، سالب = انصراف مبكر
+  }
+  return Number(a.ot||0);
+}
 function sumAccurateOT(recs){
   const seenDays = new Set();
-  return recs.reduce((s,a)=>s+accurateOtHoursFor(a, seenDays), 0);
+  const net = recs.reduce((s,a)=>s+netOtHoursFor(a, seenDays), 0);
+  return Math.max(0, net); // الإجمالي الشهري النهائي مايرجعش تحت الصفر
 }
 // ===== قائمة سجلات الأوفرتايم الدقيقة لموظف في الدورة الحالية =====
 // تُستخدم في مكانين لازم يفضلوا متطابقين بالظبط (نفس العدد ونفس الترتيب
@@ -2786,6 +2821,29 @@ function buildAccurateOtRecs(emp){
   if(emp.attExempt) recs = recs.filter(a=>a.nt!=='مزامنة تلقائية');
   const seenDays = new Set();
   return recs.map(a=>({...a, ot: accurateOtHoursFor(a, seenDays)})).filter(a=>Number(a.ot)>0);
+}
+// ===== إجمالي ساعات "الانصراف المبكر" لموظف في الدورة الحالية — تُستخدم
+// فقط داخل كشف المرتبات (calcSlip) لخصم قيمتها (بسعر الساعة العادي × 1،
+// بدون أي مضاعف أوفرتايم) من رصيد الأوفرتايم المستحق، وعرضها كبند منفصل
+// وواضح "خصم انصراف مبكر" — حسب اختيار المستخدم الصريح. ملحوظة مهمة: هنا
+// (على عكس buildAccurateOtRecs) بنفحص كل سجلات الحضور العادية بصرف النظر
+// عن قيمة a.ot المخزّنة (اللي ممكن تكون صفر أو غلط لسجلات المزامنة
+// التلقائية)، لأن يوم "الانصراف المبكر" مالوش قيمة ot موجبة مخزّنة أصلاً
+function calcEarlyDepartureHours(emp){
+  const empOtEligible = (emp.ot||'مؤهل') !== 'غير مؤهل';
+  if(!empOtEligible) return 0;
+  let recs = DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m&&isNormalHourOT(a)&&a.ti&&a.to);
+  if(emp.attExempt) recs = recs.filter(a=>a.nt!=='مزامنة تلقائية');
+  const seenDays = new Set();
+  let totalMins = 0;
+  recs.forEach(a=>{
+    const key = a.eid+'|'+a.dt;
+    if(seenDays.has(key)) return;
+    seenDays.add(key);
+    const wb = (typeof calcShiftOTBalance==='function') ? calcShiftOTBalance(a.eid, a.dt) : null;
+    if(wb && wb.balanceMins < 0) totalMins += -wb.balanceMins;
+  });
+  return totalMins / 60;
 }
 
 // ===== تحديث OT لكل سجلات اليوم بعد الاستيراد =====
@@ -2844,6 +2902,14 @@ function calcSlip(emp){
     otVal+=val;otDetails.push({label,val});});
   const hr=hrRate;
   const totalOt=otRecs.reduce((s,a)=>s+Number(a.ot||0),0);
+  // ===== خصم الانصراف المبكر من رصيد الأوفرتايم المستحق =====
+  // otRecs/otDetails/totalOt فوق فضلوا زي ما هما بالظبط (القائمة الإجمالية
+  // الخام لكل سجلات الأوفرتايم الفعلية) — الخصم هنا بيتطبق بعد كده على
+  // otVal فقط، وبيوصف بعنوانه في بند منفصل في تفاصيل المرتب، حسب اختيار
+  // المستخدم الصريح (بسعر الساعة العادي ×1، مايتعداش قيمة الأوفرتايم نفسها)
+  const earlyDepHours = calcEarlyDepartureHours(emp);
+  const earlyDepVal = earlyDepHours>0 ? earlyDepHours*hrRate : 0;
+  if(earlyDepVal>0) otVal = Math.max(0, otVal - earlyDepVal);
   // حضور
   const absRecs=DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m);// غياب بإذن — من الأساسي
   const absDays=absRecs.filter(a=>a.st==='غياب بإذن'||a.st==='غياب').length;
@@ -2910,7 +2976,7 @@ function calcSlip(emp){
   const drawsTotal=DB.draws.filter(d=>d.eid===emp.id&&Number(d.y)===DB.cycle.y&&Number(d.m)===DB.cycle.m).reduce((s,d)=>s+Number(d.am||0),0);const gross=basic+allow+otVal,deduct=insEmp+pen+advInst+drawsTotal;
   const rawNet=Math.max(0,gross-deduct);
   const net=roundNetSalary(rawNet);
-  return{basic,allow,allowInCalc,allowOutCalc,otVal,otHrs:totalOt,otDetails,gross,insEmp,absPen,unAuthPen,unAuthDays,latePen,lateCount:lateRecs.length,pen,advInst,drawsTotal,deduct,net,rawNet};}
+  return{basic,allow,allowInCalc,allowOutCalc,otVal,otHrs:totalOt,otDetails,earlyDepHours,earlyDepVal,gross,insEmp,absPen,unAuthPen,unAuthDays,latePen,lateCount:lateRecs.length,pen,advInst,drawsTotal,deduct,net,rawNet};}
 
 // ===== تقريب صافي المرتب حسب القاعدة المختارة في الإعدادات =====
 // none: بدون تقريب | r50_100: العشرات 1-50 → لأقرب 50 | العشرات 51-99 → لأقرب 100
@@ -6814,6 +6880,13 @@ function openPaySlip(eid){
           <span style="font-size:12.5px;font-weight:700;color:#ea580c">${fc(p.latePen)} ج.م</span>
         </div>`:''}
 
+        <!-- خصم الانصراف المبكر -->
+        ${p.earlyDepHours>0?`
+        <div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #f0f4fc">
+          <span style="font-size:12px;color:#ea580c;font-weight:600">خصم انصراف مبكر (${p.earlyDepHours.toFixed(2)} س × 1)</span>
+          <span style="font-size:12.5px;font-weight:700;color:#ea580c">${fc(p.earlyDepVal)} ج.م</span>
+        </div>`:''}
+
         <!-- السلف -->
         ${advs.map(a=>`
         <div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #f0f4fc">
@@ -8283,7 +8356,7 @@ function exportDailyAttCSV(){
 function reportAttendance(el){
   const recs = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);const totOtHrs = sumAccurateOT(recs);const absDays = recs.filter(a=>a.st==='غياب'||a.st==='غياب بإذن').length;const unAuthDays = recs.filter(a=>a.st==='غياب بدون إذن').length;const presRecs = recs.filter(a=>a.st==='حضور'||a.st==='');// تجميع لكل موظف
   const empMap = {};const seenOtDaysRep = new Set();recs.forEach(r=>{
-    if(!empMap[r.eid]) empMap[r.eid]={eid:r.eid,present:0,absent:0,unauth:0,otHrs:0};if(r.st==='حضور'||!r.st) empMap[r.eid].present++;else if(r.st==='غياب بدون إذن') empMap[r.eid].unauth++;else if(r.st.includes('غياب')) empMap[r.eid].absent++;empMap[r.eid].otHrs+=accurateOtHoursFor(r, seenOtDaysRep);});el.innerHTML = `
+    if(!empMap[r.eid]) empMap[r.eid]={eid:r.eid,present:0,absent:0,unauth:0,otHrs:0};if(r.st==='حضور'||!r.st) empMap[r.eid].present++;else if(r.st==='غياب بدون إذن') empMap[r.eid].unauth++;else if(r.st.includes('غياب')) empMap[r.eid].absent++;empMap[r.eid].otHrs+=netOtHoursFor(r, seenOtDaysRep);});el.innerHTML = `
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:18px">
     ${kpiCard('event_available','أيام الحضور',presRecs.length,'#16a34a','#dcfce7')}
     ${kpiCard('event_busy','غياب بإذن',absDays,'#d97706','#fef3c7')}
