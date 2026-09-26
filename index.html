@@ -2622,11 +2622,33 @@ function getConversionPreview(attId, newStatus){
 
 
 
+// ===== يحوّل وقت (HH:MM أو أي صيغة يفهمها normalizeTime) لعدد دقائق من
+// نصف الليل — يرجع null لو الوقت فاضي/غير صالح، عشان اللي بيستخدمها يقدر
+// يرجع لنفس الـLogic الحالي بدون تغيير في الحالة دي =====
+function timeToMins(t){
+  if(!t) return null;
+  const norm = (typeof normalizeTime==='function') ? normalizeTime(t) : t;
+  if(!norm) return null;
+  const parts = String(norm).split(':');
+  if(parts.length < 2) return null;
+  const h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+  if(Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h*60 + m;
+}
+
 // ===== حساب أوفرتايم الشيفتات — Spec Section 3 =====
 // OT يبدأ بعد 8:30 من ميعاد حضور الموظف المحدد في كارته
 function calcShiftOT(eid, dt){
   const dayRecs = DB.att.filter(a=>a.eid===eid&&a.dt===dt);
   if(!dayRecs.length) return 0;
+
+  // ميعاد حضور الموظف المحدد في كارته (emp.workTime) — بيُستخدم فقط
+  // كحد أدنى لبداية احتساب الأوفرتايم لو الموظف حضر قبله فعليًا. لو
+  // مفيش ميعاد محدد أو غير صالح، الحساب يفضل زي ما كان بالظبط (من غير
+  // أي حد أدنى) — إضافة Add-only على نقطة "بداية حساب الأوفرتايم" بس،
+  // وقت الحضور/الانصراف الفعلي المخزّن في السجل نفسه مبيتغيّرش خالص
+  const emp = DB.emp.find(e=>e.id===eid);
+  const schedMins = emp ? timeToMins(emp.workTime) : null;
 
   // مجموع كل شيفتات اليوم (حضور+انصراف لكل شيفت مسجّل في نفس اليوم)
   // مثال: 8ص-4م (8 ساعات) + 5م-10م (5 ساعات) = 13 ساعة إجمالي
@@ -2635,7 +2657,14 @@ function calcShiftOT(eid, dt){
     if(rec.ti && rec.to){
       const[h1,m1]=normalizeTime(rec.ti).split(':').map(Number);
       const[h2,m2]=normalizeTime(rec.to).split(':').map(Number);
-      const mins=(h2*60+m2)-(h1*60+m1);
+      let startMins = h1*60+m1;
+      const endMins = h2*60+m2;
+      // لو الحضور الفعلي لهذا الشيفت قبل ميعاد الموظف المحدد، ابدأ
+      // الحساب من الميعاد المحدد بدل وقت الحضور المبكر (بيأثر بس على
+      // أول شيفت مبكر في اليوم — أي شيفت لاحق وقته أصلاً بعد الميعاد
+      // المحدد مبيتأثرش لأن max() ميغيروش)
+      if(schedMins !== null && startMins < schedMins) startMins = schedMins;
+      const mins = endMins - startMins;
       if(mins>0) totalMins+=mins;
     }
   });
@@ -3362,11 +3391,20 @@ function saveAttEdit(attId){
     const [h2,m2]=to.split(':').map(Number);
     const mins=(h2*60+m2)-(h1*60+m1);
     if(mins > 0){
+      // ساعات الحضور الفعلية (زي ما هي بالظبط) — من وقت الحضور الحقيقي
+      // المسجّل، مبيتأثرش بميعاد الموظف المحدد في كارته خالص
       hours = (mins/60).toFixed(1);
-      // أوفرتايم (أكثر من 8 ساعات)
-      const workHrs = mins/60;
+      // أوفرتايم (أكثر من 8 ساعات) — بحد أدنى لبداية الحساب هو ميعاد
+      // حضور الموظف المسجّل في كارته (emp.workTime)، لو الحضور الفعلي
+      // كان قبله. لو مفيش ميعاد محدد أو غير صالح، الحساب يفضل زي ما هو
+      // بالظبط بدون أي تغيير (Add-only على نقطة بداية حساب الأوفرتايم بس)
+      const emp = DB.emp.find(e=>e.id===DB.att[idx].eid);
+      const schedMins = emp ? timeToMins(emp.workTime) : null;
+      const actualStartMins = h1*60+m1;
+      const otStartMins = (schedMins !== null && actualStartMins < schedMins) ? schedMins : actualStartMins;
+      const otWorkHrs = ((h2*60+m2) - otStartMins) / 60;
       const stdHrs = Number(DB.rules?.['work_hrs']||8);
-      ot = workHrs > stdHrs ? Number((workHrs-stdHrs).toFixed(1)) : 0;
+      ot = otWorkHrs > stdHrs ? Number((otWorkHrs-stdHrs).toFixed(1)) : 0;
     }
   }
 
