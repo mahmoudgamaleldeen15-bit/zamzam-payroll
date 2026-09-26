@@ -2731,6 +2731,46 @@ function calcShiftOTBalance(eid, dt){
   return { totalMins, requiredMins, balanceMins };
 }
 
+// ===== توحيد مصدر "ساعات الأوفرتايم الصحيحة" لكل الإجماليات والتقارير
+// وكشف المرتبات (بدل الاعتماد المباشر على a.ot المخزّن، اللي ممكن يكون
+// غير دقيق للسجلات الجاية من مزامنة البصمة التلقائية أو المُستوردة/
+// المُدخلة قبل إصلاح معادلة الأوفرتايم) =====
+// القاعدة: سجل "ساعات عادية" (بدون نوع أوفرتايم = يوم عمل إضافي/يوم بدل
+// راحة) وليه وقت حضور وانصراف حقيقي (ti&&to) بيُعاد حساب قيمته حيًّا
+// بنفس معادلة calcShiftOT المضبوطة (ميعاد الموظف المسجّل + 8 ساعات
+// و30 دقيقة)، مرة واحدة بس لكل (موظف+تاريخ) عشان لو اليوم فيه أكتر من
+// شيفت/سجل مايتحسبش أكتر من مرة. أي سجل تاني — يوم عمل إضافي/يوم بدل
+// راحة (مُدخل يدويًا كعدد أيام مش ساعات)، أو سجل بدون وقت حضور حقيقي —
+// يفضل بالقيمة المخزّنة زي ما هي بالظبط من غير أي تغيير
+function isNormalHourOT(a){
+  return !a.ott || a.ott==='hour_normal' || a.ott==='عادي (1.5×)' || a.ott==='ساعة إضافية عادية';
+}
+function accurateOtHoursFor(a, seenDays){
+  if(isNormalHourOT(a) && a.ti && a.to){
+    const key = a.eid+'|'+a.dt;
+    if(seenDays.has(key)) return 0; // اتحسب مسبقًا ضمن نفس اليوم (شيفت تاني)
+    seenDays.add(key);
+    return (typeof calcShiftOT==='function') ? calcShiftOT(a.eid, a.dt) : Number(a.ot||0);
+  }
+  return Number(a.ot||0);
+}
+function sumAccurateOT(recs){
+  const seenDays = new Set();
+  return recs.reduce((s,a)=>s+accurateOtHoursFor(a, seenDays), 0);
+}
+// ===== قائمة سجلات الأوفرتايم الدقيقة لموظف في الدورة الحالية =====
+// تُستخدم في مكانين لازم يفضلوا متطابقين بالظبط (نفس العدد ونفس الترتيب
+// عشان ربط كل سطر بقيمته p.otDetails[i] يفضل صحيح): calcSlip() لحساب
+// قيمة الأوفرتايم الفعلية في المرتب، و openPaySlip() لعرض تفاصيلها
+function buildAccurateOtRecs(emp){
+  const empOtEligible = (emp.ot||'مؤهل') !== 'غير مؤهل';
+  if(!empOtEligible) return [];
+  let recs = DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m&&Number(a.ot)>0);
+  if(emp.attExempt) recs = recs.filter(a=>a.nt!=='مزامنة تلقائية');
+  const seenDays = new Set();
+  return recs.map(a=>({...a, ot: accurateOtHoursFor(a, seenDays)})).filter(a=>Number(a.ot)>0);
+}
+
 // ===== تحديث OT لكل سجلات اليوم بعد الاستيراد =====
 function recalcDayOT(eid, dt){
   const ot = calcShiftOT(eid, dt);
@@ -2768,16 +2808,10 @@ function calcSlip(emp){
   // تأمينات — مبلغ ثابت
   let insEmp=0;if(emp.ins==='مؤمَّن عليه'){
     const empAmt=Number(emp.insAmt)||0;insEmp=empAmt>0?empAmt:gr('ins_fixed',0);}
-  // أوفرتايم — فقط لو الموظف مؤهل
-  const empOtEligible = (emp.ot||'مؤهل') !== 'غير مؤهل';
-  let otRecs = [];
-  if(empOtEligible){
-    otRecs = DB.att.filter(a=>a.eid===emp.id&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m&&Number(a.ot)>0);
-    // الموظف المستثنى من نظام الحضور: نستبعد الأوفرتايم الجاي تلقائيًا من مزامنة
-    // البصمة (مش إجراء إداري صريح) — أي أوفرتايم مُدخل يدويًا من شاشة الحضور
-    // يفضل يُحتسب طبيعي زي ما هو
-    if(emp.attExempt) otRecs = otRecs.filter(a=>a.nt!=='مزامنة تلقائية');
-  }
+  // أوفرتايم — فقط لو الموظف مؤهل. القيمة بتُحسب حيًّا من buildAccurateOtRecs
+  // (بدل الاعتماد على a.ot المخزّن مباشرة) عشان تفضل مطابقة لعمود الأوفرتايم
+  // الصحيح بتاب الحضور، حتى للسجلات الجاية من مزامنة البصمة التلقائية
+  let otRecs = buildAccurateOtRecs(emp);
   // أساس حساب قيمة الساعة — القاعدة الوحيدة المستخدمة لكل حسابات الأوفرتايم
   // بالساعة، تُحدَّد من القواعد والإعدادات فقط (مفيش قاعدة تانية في مكان تاني)
   const otHrBase = DB.rules['ot_hr_base']||'basic';
@@ -3199,7 +3233,7 @@ function renderAtt(){
     recs=recs.filter(a=>a.y===Number(y)&&a.m===Number(m));
   } else {
     recs=recs.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);
-  }const oth=recs.reduce((s,a)=>s+Number(a.ot||0),0);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;
+  }const oth=sumAccurateOT(recs);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;
   // كارتات الحالات الأخرى — نفس مصدر البيانات (recs) بالضبط عشان الأرقام تفضل متطابقة مع الجدول
   const presentEl=document.getElementById('at-present');if(presentEl) presentEl.textContent=recs.filter(a=>a.st==='حضور').length;
   const authAbsEl=document.getElementById('at-authabs');if(authAbsEl) authAbsEl.textContent=recs.filter(a=>a.st==='غياب بإذن').length;
@@ -6646,8 +6680,9 @@ function openPaySlip(eid){
   const cycle = `${MONTHS_PS[DB.cycle.m-1]} ${DB.cycle.y}`;
   const ini = (e.nm||'?').trim().split(' ').map(w=>w[0]).slice(0,2).join('');
 
-  // تفاصيل الأوفرتايم
-  const otRecs = DB.att.filter(a=>a.eid===eid&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m&&Number(a.ot||0)>0);
+  // تفاصيل الأوفرتايم — لازم نفس دالة calcSlip بالظبط (buildAccurateOtRecs)
+  // عشان تفضل مطابقة تمامًا لقيم p.otDetails بالترتيب والعدد
+  const otRecs = buildAccurateOtRecs(e);
 
   // تفاصيل الجزاءات
   const absRecs = DB.att.filter(a=>a.eid===eid&&Number(a.y)===DB.cycle.y&&Number(a.m)===DB.cycle.m);
@@ -8229,9 +8264,9 @@ function exportDailyAttCSV(){
 
 
 function reportAttendance(el){
-  const recs = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);const totOtHrs = recs.reduce((s,a)=>s+Number(a.ot||0),0);const absDays = recs.filter(a=>a.st==='غياب'||a.st==='غياب بإذن').length;const unAuthDays = recs.filter(a=>a.st==='غياب بدون إذن').length;const presRecs = recs.filter(a=>a.st==='حضور'||a.st==='');// تجميع لكل موظف
-  const empMap = {};recs.forEach(r=>{
-    if(!empMap[r.eid]) empMap[r.eid]={eid:r.eid,present:0,absent:0,unauth:0,otHrs:0};if(r.st==='حضور'||!r.st) empMap[r.eid].present++;else if(r.st==='غياب بدون إذن') empMap[r.eid].unauth++;else if(r.st.includes('غياب')) empMap[r.eid].absent++;empMap[r.eid].otHrs+=Number(r.ot||0);});el.innerHTML = `
+  const recs = DB.att.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);const totOtHrs = sumAccurateOT(recs);const absDays = recs.filter(a=>a.st==='غياب'||a.st==='غياب بإذن').length;const unAuthDays = recs.filter(a=>a.st==='غياب بدون إذن').length;const presRecs = recs.filter(a=>a.st==='حضور'||a.st==='');// تجميع لكل موظف
+  const empMap = {};const seenOtDaysRep = new Set();recs.forEach(r=>{
+    if(!empMap[r.eid]) empMap[r.eid]={eid:r.eid,present:0,absent:0,unauth:0,otHrs:0};if(r.st==='حضور'||!r.st) empMap[r.eid].present++;else if(r.st==='غياب بدون إذن') empMap[r.eid].unauth++;else if(r.st.includes('غياب')) empMap[r.eid].absent++;empMap[r.eid].otHrs+=accurateOtHoursFor(r, seenOtDaysRep);});el.innerHTML = `
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:18px">
     ${kpiCard('event_available','أيام الحضور',presRecs.length,'#16a34a','#dcfce7')}
     ${kpiCard('event_busy','غياب بإذن',absDays,'#d97706','#fef3c7')}
