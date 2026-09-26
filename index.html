@@ -2142,7 +2142,13 @@ async function fbAutoDownloadChanges(fbTs){
       // فايربيز، وده كان بيسبب رجوع قرارات (زي تحويل حالة يوم أو تجاهل
       // تنبيه) لحالتها القديمة بعد ثوانٍ من الحفظ
       const recentWriteTs = window._recentLocalWrites && window._recentLocalWrites[k];
-      if(recentWriteTs && (Date.now() - recentWriteTs) < 8000){
+      // حماية إضافية: لو لسه فيه رفعة (Push) لنفس الجدول شغالة فعليًا (مبعتاش
+      // نتيجتها لسه، سواء نجاح أو فشل) منزّلش نسخة فايربيز خالص بغض النظر عن
+      // الوقت — الاعتماد على "فرق وقت ثابت" بس (8 ثواني) كان بيفشل لو الشبكة
+      // بطيئة وسلسلة الرفع+التحديث (Push ثم توثيق آخر تعديل) خدت وقت أطول من
+      // كده، وكانت هي بالظبط سبب رجوع قرار المحاسب بعد فترة بدل ما يحصل فورًا
+      const stillPushing = window._fbPushInFlight && window._fbPushInFlight[k] > 0;
+      if(stillPushing || (recentWriteTs && (Date.now() - recentWriteTs) < 15000)){
         // لسه في رفعة محلية حديثة لنفس الجدول لم نتأكد إنها انعكست على
         // فايربيز فعليًا — منسجلش "شفنا آخر نسخة" هنا عشان لو الرفعة دي
         // فشلت أو اتأخرت، نتحقق تاني صح في المرة الجاية بدل ما نفتكر
@@ -2364,6 +2370,12 @@ function sv(k, d){
     // الرفعة نجحت فعلاً ووصلت فايربيز (مش لو فشلت بصمت)
     window._fbWriteSeq[k] = (window._fbWriteSeq[k] || 0) + 1;
     const mySeq = window._fbWriteSeq[k];
+    // عداد "رفعات شغالة دلوقتي" لكل جدول — بيفضل أكبر من صفر طول ما الرفعة
+    // (Push) وتوثيق آخر تعديل (Touch) اللي بيتبعت بعدها لسه ماخلصوش خالص،
+    // بغض النظر عن الوقت. ده أدق من الاعتماد على فرق وقت ثابت بس، لأن
+    // سلسلة Push+Touch ممكن تاخد وقت متفاوت حسب سرعة الشبكة
+    window._fbPushInFlight = window._fbPushInFlight || {};
+    window._fbPushInFlight[k] = (window._fbPushInFlight[k] || 0) + 1;
     fbPush(k, d).then(ok=>{
       if(ok && window._fbWriteSeq[k] === mySeq){
         // نجدّد وقت "آخر كتابة محلية" هنا كمان — لحد ما العلامة توصل
@@ -2371,7 +2383,12 @@ function sv(k, d){
         window._recentLocalWrites[k] = Date.now();
         return fbTouchLastUpdate(k);
       }
-    }).catch(()=>{});
+    }).catch(()=>{}).finally(()=>{
+      // خلصت الرفعة دي (نجاح أو فشل) — نجدّد الطابع الزمني كمان كحماية
+      // أخيرة لفترة قصيرة بعد الانتهاء الفعلي، وننزّل عداد "شغالة دلوقتي"
+      window._recentLocalWrites[k] = Date.now();
+      window._fbPushInFlight[k] = Math.max(0, (window._fbPushInFlight[k]||1) - 1);
+    });
   }
 }
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
