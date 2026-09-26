@@ -2698,6 +2698,39 @@ function calcWorkBalance(eid, dt){
   return { totalMins, requiredMins, balanceMins };
 }
 
+// ===== حساب رصيد الأوفرتايم لعمود "الرصيد" في تاب الحضور والانصراف =====
+// دالة مستقلة تمامًا عن calcWorkBalance (اللي بيفضل زي ما هو، ومستخدم في
+// مكان تاني مختلف تمامًا لرصد الانصراف المبكر بمنطقه الحالي من غير أي تغيير).
+// هنا: لو الموظف حضر قبل ميعاده المسجل في كارته، بنتجاهل وقت الحضور المبكر
+// ده تمامًا في حساب مدة الـ8 ساعات و30 دقيقة (نفس منطق calcShiftOT بالظبط)،
+// وبنرجّع القيمة بالسالب/الموجب (زي شكل calcWorkBalance) عشان تتعرض في
+// نفس العمود بنفس التنسيق (+/- س:د) من غير ما نغيّر أي حاجة تانية.
+function calcShiftOTBalance(eid, dt){
+  const dayRecs = DB.att.filter(a=>a.eid===eid&&a.dt===dt);
+  if(!dayRecs.length) return {totalMins:0, requiredMins:510, balanceMins:0};
+  const emp = DB.emp.find(e=>e.id===eid);
+  const schedMins = emp ? timeToMins(emp.workTime) : null;
+
+  let totalMins = 0;
+  dayRecs.forEach(rec=>{
+    if(rec.ti && rec.to){
+      const[h1,m1]=normalizeTime(rec.ti).split(':').map(Number);
+      const[h2,m2]=normalizeTime(rec.to).split(':').map(Number);
+      let startMins = h1*60+m1;
+      const endMins = h2*60+m2;
+      // موعد الحضور المسجل في كارت الموظف هو نقطة البداية المرجعية عند
+      // وجود حضور مبكر — وليس وقت الحضور الفعلي المبكر
+      if(schedMins !== null && startMins < schedMins) startMins = schedMins;
+      const mins = endMins - startMins;
+      if(mins>0) totalMins+=mins;
+    }
+  });
+
+  const requiredMins = 510; // 8 ساعات و30 دقيقة
+  const balanceMins = totalMins - requiredMins;
+  return { totalMins, requiredMins, balanceMins };
+}
+
 // ===== تحديث OT لكل سجلات اليوم بعد الاستيراد =====
 function recalcDayOT(eid, dt){
   const ot = calcShiftOT(eid, dt);
@@ -3238,7 +3271,7 @@ function renderAtt(){
   <td style="text-align:center">
     ${(()=>{
       if(!a.ti||!a.to) return '<span style="color:#94a3b8">—</span>';
-      const wb=calcWorkBalance(a.eid,a.dt);
+      const wb=calcShiftOTBalance(a.eid,a.dt);
       const bal=wb.balanceMins;
       // مهم: ناخد القيمة المطلقة الأول ثم نقسّمها لساعات/دقائق
       // (Math.floor على رقم سالب زي -5 بيرجّع -1 غلط لو مقسمناه قبل الـ abs)
