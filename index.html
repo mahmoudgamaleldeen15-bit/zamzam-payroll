@@ -2887,6 +2887,43 @@ function calcEarlyDepartureHours(emp){
   return totalMins / 60;
 }
 
+// ===== حساب دقائق التأخير الفعلية من بيانات الحضور — إصلاح جذر مشكلة
+// "شرائح التأخير معرّفة صح في الإعدادات بس مش بتتطبق فعليًا في المرتب" =====
+// السبب الحقيقي: شرائح التأخير في calcSlip كانت (ولسه) بتعتمد على حقل
+// a.lateMin المخزّن جوه سجل الحضور — لكن الحقل ده في الواقع العملي كان
+// بيتسجّل بس من نافذة "تسجيل حضور" اليدوية (اللي فيها خانة "دقائق التأخير"
+// منفصلة يكتبها حد يدويًا). كل باقي مصادر بيانات الحضور الحقيقية — الاستيراد
+// من البصمة (importAttCSV، سواء CSV أو JSON) وتعديل سجل حضور موجود
+// (saveAttEdit) — كانت بتسجّل وقت الدخول/الخروج الفعلي (ti/to) من غير ما
+// تحسب أو تحفظ a.lateMin خالص (بيفضل 0 أو undefined دايمًا)، فشرائح
+// التأخير كانت عمليًا بتتجاهل كل موظف متأخر فعليًا لو سجل حضوره جاء من أي
+// مصدر غير النافذة اليدوية دي بالتحديد — بالظبط زي ما وصف المستخدم:
+// "الشرائح ظاهرة ومحددة صح بس مش بتتطبق فعليًا وقت حساب المرتب".
+//
+// الإصلاح: بدل الاعتماد على رقم يدوي لازم حد يكتبه، بنحسب التأخير الفعلي
+// مباشرة من "بيانات الحضور" الحقيقية نفسها — وقت الحضور الفعلي المسجل
+// (rec.ti) مقارنةً بميعاد حضور الموظف المحدد في كارته (emp.workTime)، بنفس
+// أسلوب المقارنة المستخدم فعليًا في calcShiftOT/calcShiftOTBalance. ده
+// معناه: أي موظف عنده وقت دخول فعلي متأخر عن ميعاده، شريحة التأخير
+// المناسبة (المُعرّفة زي ما هي في القواعد والإعدادات، من غير أي تغيير في
+// تعريفها) هتتطبق عليه تلقائيًا بشكل افتراضي — من غير ما يحتاج حد يفعّلها
+// يدويًا لكل موظف على حدة — تمامًا زي المطلوب.
+//
+// لو السجل مالوش وقت دخول فعلي مسجّل (ti فاضي) — زي حالة النافذة اليدوية
+// القديمة اللي بتاخد رقم التأخير مباشرة من غير وقت دخول — بنرجع للقيمة
+// المخزّنة يدويًا (rec.lateMin) عشان أي سجلات اتسجلت بالطريقة دي تفضل شغالة
+// بالظبط زي ما كانت، من غير أي تغيير في سلوكها.
+function calcLateMinutes(rec, emp){
+  if(rec && rec.st==='حضور' && rec.ti){
+    const schedMins = emp ? timeToMins(emp.workTime) : null;
+    const actualMins = timeToMins(rec.ti);
+    if(schedMins!=null && actualMins!=null){
+      return actualMins>schedMins ? (actualMins-schedMins) : 0;
+    }
+  }
+  return Number(rec&&rec.lateMin||0);
+}
+
 // ===== تحديث OT لكل سجلات اليوم بعد الاستيراد =====
 function recalcDayOT(eid, dt){
   const ot = calcShiftOT(eid, dt);
@@ -2996,9 +3033,12 @@ function calcSlip(emp){
     : gr('lt_gr',15);
   let latePen=0;
   // استبعاد كامل من خصم التأخير — بغض النظر عن دقائق التأخير الفعلية
-  const lateRecs = (emp.lateExempt || emp.attExempt) ? [] : absRecs.filter(a=>Number(a.lateMin||0)>empLateGrace);
+  // دقائق التأخير بتتحسب فعليًا من بيانات الحضور (calcLateMinutes) مش من
+  // رقم يدوي — عشان الشرائح تتفعّل تلقائيًا لأي سجل حضور حقيقي (مستورد من
+  // البصمة أو متعدَّل من تاب الحضور)، مش بس السجلات المُدخلة يدويًا
+  const lateRecs = (emp.lateExempt || emp.attExempt) ? [] : absRecs.filter(a=>calcLateMinutes(a,emp)>empLateGrace);
   lateRecs.forEach(a=>{
-    const mins=Number(a.lateMin||0);
+    const mins=calcLateMinutes(a,emp);
     const dB=dailyBasic;const dG=dailyGross;
     let pen=0;const m15=DB.rules['lt_15_mode']||'quarter_basic';const m30=DB.rules['lt_30_mode']||'half_basic';const m45=DB.rules['lt_45_mode']||'full_basic';const m60=DB.rules['lt_60_mode']||'full_basic';
     if(mins<=empLateGrace) return; // ضمن السماح الخاص
@@ -3358,7 +3398,18 @@ function renderAtt(){
     recs=recs.filter(a=>a.y===Number(y)&&a.m===Number(m));
   } else {
     recs=recs.filter(a=>a.y===DB.cycle.y&&a.m===DB.cycle.m);
-  }const oth=sumAccurateOT(recs);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;document.getElementById('at-lt').textContent=recs.filter(a=>a.isLate).length;
+  }const oth=sumAccurateOT(recs);document.getElementById('at-oth').textContent=oth.toFixed(1);document.getElementById('at-otv').textContent=fc(0);document.getElementById('at-ab').textContent=recs.filter(a=>a.st==='غياب بدون إذن').length;
+  // حالات التأخير — كانت بتتحسب من a.isLate اللي بيفضل false دايمًا (مفيش
+  // أي مكان في البرنامج كله بيحطه true) فالمربع كان بيعرض صفر دايمًا مهما
+  // كان فيه موظفين متأخرين فعليًا. دلوقتي بيتحسب بنفس المنطق بالظبط
+  // المستخدم في حساب المرتب (calcLateMinutes + سماح التأخير الخاص/العام +
+  // الاستبعاد الكامل) عشان الرقم يطابق فعليًا اللي هيتخصم في كشف المرتبات
+  document.getElementById('at-lt').textContent=recs.filter(a=>{
+    const emp=DB.emp.find(e=>e.id===a.eid);
+    if(!emp||emp.lateExempt||emp.attExempt) return false;
+    const empGrace = emp.lateEx && Number(emp.lateGrace||0)>0 ? Number(emp.lateGrace) : gr('lt_gr',15);
+    return calcLateMinutes(a,emp)>empGrace;
+  }).length;
   // كارتات الحالات الأخرى — نفس مصدر البيانات (recs) بالضبط عشان الأرقام تفضل متطابقة مع الجدول
   const presentEl=document.getElementById('at-present');if(presentEl) presentEl.textContent=recs.filter(a=>a.st==='حضور').length;
   const authAbsEl=document.getElementById('at-authabs');if(authAbsEl) authAbsEl.textContent=recs.filter(a=>a.st==='غياب بإذن').length;
@@ -3943,7 +3994,13 @@ function loadRules(){
   const def={ins_co:26,ins_fixed:0,ot_mx:120,lt_gr:15,lt_ml:1,ab_ml:1,r_tr:500,r_lv:300,r_bn:10,unauth_mode:'full',r_unauth_ml:1};const r={...def,...DB.rules};const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)el.value=r[k]});const umEl=document.getElementById('r-unauth-mode');if(umEl)umEl.value=r['unauth_mode']||'full';const umlEl=document.getElementById('r-unauth-ml');if(umlEl)umlEl.value=r['r_unauth_ml']||1;const abBaseEl=document.getElementById('r-ab-base');if(abBaseEl)abBaseEl.value=r['ab_base']||'current';const unauthBaseEl=document.getElementById('r-unauth-base');if(unauthBaseEl)unauthBaseEl.value=r['unauth_base']||'current';updateAbBaseSummary();// أوفرتايم
   const otHrBase=document.getElementById('r-ot-hr-base');if(otHrBase)otHrBase.value=r['ot_hr_base']||'basic';const otRgMode=document.getElementById('r-ot-rg-mode');if(otRgMode)otRgMode.value=r['ot_rg_mode']||'1.5';const otDayMode=document.getElementById('r-ot-day-mode');if(otDayMode){otDayMode.value=r['ot_day_mode']||'full_1';document.getElementById('r-ot-day-fixed-wrap').style.display=r['ot_day_mode']==='fixed'?'block':'none';}
   const otDayFixed=document.getElementById('r-ot-day-fixed');if(otDayFixed)otDayFixed.value=r['ot_day_fixed']||0;const otRestMode=document.getElementById('r-ot-rest-mode');if(otRestMode){otRestMode.value=r['ot_rest_mode']||'full_2';document.getElementById('r-ot-rest-fixed-wrap').style.display=r['ot_rest_mode']==='fixed'?'block':'none';}
-  const otRestFixed=document.getElementById('r-ot-rest-fixed');if(otRestFixed)otRestFixed.value=r['ot_rest_fixed']||0;}
+  const otRestFixed=document.getElementById('r-ot-rest-fixed');if(otRestFixed)otRestFixed.value=r['ot_rest_fixed']||0;
+  // شرائح التأخير المتدرجة — كانت بتُحفظ صح فعليًا (في saveRules تحت) بس
+  // مكانتش بترجع تتعرض في القوائم المنسدلة عند فتح التاب تاني، فكان يبان
+  // وكأن الاختيار "مش محفوظ فعليًا" رغم إنه محفوظ ومُطبَّق فعليًا في المرتب
+  const ltDefaults={'15':'quarter_basic','30':'half_basic','45':'full_basic','60':'full_basic'};
+  ['15','30','45','60'].forEach(n=>{const ltEl=document.getElementById('r-lt-'+n+'-mode');if(ltEl)ltEl.value=r['lt_'+n+'_mode']||ltDefaults[n];});
+}
 function saveRules(){
   const m={'ins_fixed':'r-ins-fixed','ot_mx':'r-ot-mx','lt_gr':'r-lt-gr','lt_ml':'r-lt-ml','ab_ml':'r-ab-ml','r_tr':'r-tr','r_lv':'r-lv','r_bn':'r-bn','net_round_mode':'r-net-round'};const r={};Object.entries(m).forEach(([k,id])=>{const el=document.getElementById(id);if(el)r[k]=el.value});const umSv=document.getElementById('r-unauth-mode');if(umSv)r['unauth_mode']=umSv.value;const umlSv=document.getElementById('r-unauth-ml');if(umlSv)r['r_unauth_ml']=umlSv.value;const abBaseSv=document.getElementById('r-ab-base');if(abBaseSv)r['ab_base']=abBaseSv.value;const unauthBaseSv=document.getElementById('r-unauth-base');if(unauthBaseSv)r['unauth_base']=unauthBaseSv.value;// أوفرتايم
   const svOtHrBase=document.getElementById('r-ot-hr-base');if(svOtHrBase)r['ot_hr_base']=svOtHrBase.value;const svOtRg=document.getElementById('r-ot-rg-mode');if(svOtRg)r['ot_rg_mode']=svOtRg.value;const svOtDay=document.getElementById('r-ot-day-mode');if(svOtDay)r['ot_day_mode']=svOtDay.value;const svOtDayF=document.getElementById('r-ot-day-fixed');if(svOtDayF)r['ot_day_fixed']=svOtDayF.value;const svOtRest=document.getElementById('r-ot-rest-mode');if(svOtRest)r['ot_rest_mode']=svOtRest.value;const svOtRestF=document.getElementById('r-ot-rest-fixed');if(svOtRestF)r['ot_rest_fixed']=svOtRestF.value;['15','30','45','60'].forEach(n=>{const ltEl=document.getElementById('r-lt-'+n+'-mode');if(ltEl)r['lt_'+n+'_mode']=ltEl.value;});DB.rules={...DB.rules,...r};sv('rules',DB.rules);toast('تم حفظ القواعد','success');}
@@ -7452,6 +7509,22 @@ function renderActionTracking(){
 
   let list = DB.issues.slice();
 
+  // نطاق الدورة الافتراضي — طالما المحاسب مفيش حدد فلتر تاريخ يدوي بنفسه
+  // (من/إلى تاريخ)، القائمة بتتحصر تلقائيًا على شهر الدورة الحالي المختار
+  // (DB.cycle)؛ ده كان ناقص خالص قبل كده — التاب كان بيعرض كل إجراءات كل
+  // الشهور مع بعض دايمًا بغض النظر عن الدورة المفتوحة، فبمجرد تطبيق دورة
+  // شهر جديد، إجراءات الشهر اللي عدى كانت بتفضل ظاهرة زي ما هي. دلوقتي
+  // بمجرد تطبيق دورة جديدة، إجراءات الشهر اللي "خلص" بتختفي تلقائيًا، وتفضل
+  // قابلة للرجوع ليها وقت ما المحاسب يحتاج، ده بس عن طريق فلتر "من/إلى
+  // تاريخ" يدويًا (زرار "إعادة تعيين" برضه بيرجع لنفس السلوك الافتراضي ده)
+  if(!fFrom && !fTo && DB.cycle){
+    list = list.filter(i=>{
+      const iy = Number((i.dt||'').slice(0,4));
+      const im = Number((i.dt||'').slice(5,7));
+      return iy===DB.cycle.y && im===DB.cycle.m;
+    });
+  }
+
   if(fEmp)    list = list.filter(i=>i.eid===fEmp);
   if(fCode)   list = list.filter(i=>{ const e=DB.emp.find(x=>x.id===i.eid); return e && String(e.cd||'').toLowerCase().includes(fCode); });
   if(fFrom)   list = list.filter(i=>i.dt>=fFrom);
@@ -8260,7 +8333,12 @@ function renderDailyAttReport(){
     const restDayNum = e.restDay!==undefined&&e.restDay!=='' ? Number(e.restDay) : -1;
     const isRestDay = restDayNum>=0 && new Date(yr,mn-1,dy).getDay()===restDayNum;
     const leaveRec = DB.leaves?.find(l=>l.eid===e.id&&l.status!=='ملغاة'&&l.from<=dt&&l.to>=dt);
-    const lateMin = Number(att?.lateMin||0);
+    // دقائق التأخير بتتحسب فعليًا من بيانات الحضور (calcLateMinutes) — نفس
+    // المصدر بالظبط المستخدم في حساب المرتب — بدل الاعتماد على att.lateMin
+    // المخزّن (اللي مبيتسجّلش خالص من الاستيراد التلقائي من البصمة ولا من
+    // تعديل سجل الحضور العادي)، عشان التقرير يعرض التأخير الحقيقي لأي
+    // موظف بغض النظر عن مصدر سجل حضوره
+    const lateMin = att ? calcLateMinutes(att, e) : 0;
 
     let status='', statusColor='', statusBg='', details='';
 
