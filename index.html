@@ -6886,6 +6886,13 @@ function openPaySlip(eid){
   const absAuthPerDay = absAuthRecs.length>0 ? p.absPen/absAuthRecs.length : 0;
   const absUnauthPerDay = absUnauthRecs.length>0 ? p.unAuthPen/absUnauthRecs.length : 0;
   const lateRecs = { length: p.lateCount||0 }; // نفس الرقم بالظبط اللي calcSlip استخدمه في الخصم (بيراعي السماح الخاص والاستبعاد الكامل لكل موظف)
+  // دقائق التأخير الفعلية بغض النظر عن استثناء الموظف الحالي (lateExempt) —
+  // مطلوبة عشان نقدر نعرض مربع "تفعيل خصم التأخير" حتى لو الموظف مستبعد
+  // دلوقتي، فيقدر المحاسب يرجع يفعّله من هنا مباشرة من غير ما يدخل كارت
+  // الموظف؛ القيمة المخصومة فعليًا (p.latePen) تفضل زي ما هي من calcSlip
+  // ومحترمة للاستبعاد تمامًا — هنا بس لتحديد هل نعرض الصف والمربع أصلاً
+  const empLateGraceForSlip = e.lateEx && Number(e.lateGrace||0)>0 ? Number(e.lateGrace) : gr('lt_gr',15);
+  const rawLateRecs = absRecs.filter(a=>calcLateMinutes(a,e)>empLateGraceForSlip);
   const dailyB = (Number(e.bs)||0)/30;
 
   // تفاصيل السلف
@@ -7020,10 +7027,13 @@ function openPaySlip(eid){
         </div>`).join('')}
         ${subRow(`إجمالي غياب بدون إذن: ${absUnauthRecs.length} يوم`, p.unAuthPen, '#e03131')}`:''}
 
-        <!-- التأخيرات -->
-        ${lateRecs.length>0?`
-        <div style="display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #f0f4fc">
-          <span style="font-size:12px;color:#ea580c;font-weight:600">تأخيرات (${lateRecs.length} مرة)</span>
+        <!-- التأخيرات — مع مربع تفعيل/إلغاء سريع لخصم التأخير لنفس الموظف -->
+        ${rawLateRecs.length>0?`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-bottom:1px solid #f0f4fc">
+          <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;color:#ea580c;font-weight:600">
+            <input type="checkbox" ${!e.lateExempt?'checked':''} onchange="toggleLateExemptFromSlip('${eid}',this.checked)" style="width:14px;height:14px;accent-color:#ea580c;cursor:pointer" title="إلغاء التفعيل = استبعاد هذا الموظف من خصم التأخير نهائيًا (نفس الخيار الموجود في كارت الموظف)"/>
+            تأخيرات (${rawLateRecs.length} مرة)${e.lateExempt?' <span style="color:#94a3b8;font-weight:600">— مستبعد</span>':''}
+          </label>
           <span style="font-size:12.5px;font-weight:700;color:#ea580c">${fc(p.latePen)} ج.م</span>
         </div>`:''}
 
@@ -7080,6 +7090,24 @@ function openPaySlip(eid){
   </div>`;
 
   document.body.insertAdjacentHTML('beforeend', html);
+}
+
+// ===== تفعيل/إلغاء خصم التأخير مباشرة من كارت تفاصيل المرتب =====
+// اختصار لنفس مربع "استبعاد هذا الموظف من خصم التأخير نهائيًا" الموجود في
+// كارت الموظف — بيعدّل نفس الحقل بالظبط (emp.lateExempt) عشان الاتنين
+// يفضلوا متطابقين دايمًا مهما اتعدّلوا من أي مكان، وبيحفظ فورًا (نفس مسار
+// الحفظ المعتاد sv('emp', DB.emp) اللي بيزامن مع فايربيز زي أي تعديل تاني)
+// ثم يعيد رسم كارت تفاصيل المرتب فورًا عشان صافي المرتب المعروض ينعكس
+// على طول من غير ما يحتاج المحاسب يقفل الكارت ويفتحه تاني، ويحدّث جدول
+// كشف المرتبات (لو مفتوح) عشان عمود الصافي فيه يتحدّث برضه
+function toggleLateExemptFromSlip(eid, active){
+  const emp = DB.emp.find(x=>x.id===eid);
+  if(!emp) return;
+  emp.lateExempt = !active;
+  sv('emp', DB.emp);
+  toast(active?'تم تفعيل خصم التأخير لهذا الموظف':'تم استبعاد هذا الموظف من خصم التأخير نهائيًا','success');
+  openPaySlip(eid);
+  if(typeof filterPay==='function') filterPay();
 }
 
 // ===== إصلاح openDr — بطاقة الموظف =====
