@@ -4973,7 +4973,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏢 شركة حلوانى الغربية</div>
+    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -6930,13 +6930,13 @@ function openPaySlip(eid){
     <div class="mb" id="payslip-print-section" style="max-width:560px;max-height:90vh;overflow-y:auto;padding:0">
 
       <!-- Header -->
-      <div style="background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:20px 22px;display:flex;align-items:center;gap:13px;position:sticky;top:0;z-index:10">
+      <div id="payslip-print-header" style="background:linear-gradient(135deg,#0f2057,#0ea5a0);padding:20px 22px;display:flex;align-items:center;gap:13px;position:sticky;top:0;z-index:10">
         <div style="width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:#fff;flex-shrink:0">${ini}</div>
         <div style="flex:1">
           <div style="font-size:15px;font-weight:800;color:#fff">${e.nm}</div>
           <div style="font-size:11px;color:#7dd8f5">${e.cd||'—'} — ${e.dp||'—'} — ${cycle}</div>
         </div>
-        <button onclick="document.getElementById('payslip-detail-mo').remove()" style="background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff"><span class="ms">close</span></button>
+        <button id="payslip-close-btn" onclick="document.getElementById('payslip-detail-mo').remove()" style="background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff"><span class="ms">close</span></button>
       </div>
 
       <div style="padding:18px">
@@ -7092,9 +7092,9 @@ function openPaySlip(eid){
         </div>
 
         <!-- أزرار -->
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+        <div id="payslip-actions-row" style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
           <button class="btn bg" onclick="document.getElementById('payslip-detail-mo').remove()">إغلاق</button>
-          <button class="btn bg" onclick="window.print()"><span class="ms ms-sm">print</span>طباعة</button>
+          <button class="btn bg" onclick="printPayslipDetail()"><span class="ms ms-sm">print</span>طباعة</button>
           <button class="btn bn" onclick="sendWA1('${eid}')"><span class="ms ms-sm" style="color:#25d366">chat</span>إرسال WhatsApp</button>
         </div>
       </div>
@@ -7102,6 +7102,72 @@ function openPaySlip(eid){
   </div>`;
 
   document.body.insertAdjacentHTML('beforeend', html);
+}
+
+// ===== طباعة كارت تفاصيل المرتب (مطابقة فعلية 100% للمعاينة) =====
+// المشكلة اللي كانت موجودة: زرار "طباعة" هنا كان بينادي window.print()
+// مباشرة من غير أي CSS مخصص للطباعة — والكارت نفسه (.mo) بيعتمد في العرض
+// العادي على position:fixed مع توسيط flex، وجسم الكارت (.mb) بيعتمد على
+// max-height:90vh + overflow-y:auto. المتصفحات (خصوصًا Chrome) مش بتطبع
+// عناصر position:fixed بشكل موثوق، وأي محتوى زايد عن الـ overflow:auto
+// بيتقطع في الطباعة لأنه مفيش scroll فعلي على الورق — فكانت النتيجة ورقة
+// فاضية من القيم رغم إن نفس القيم دي ظاهرة صح تمامًا في المعاينة على
+// الشاشة. الإصلاح هنا بيستخدم بالظبط نفس الأسلوب المُجرَّب والشغال في
+// طباعة إيصالات المرتبات (printReceipts) — نفس تقنية الإخفاء
+// بـ visibility + تحويل العناصر لـ position:static وإلغاء أي max-height/
+// overflow وقت الطباعة بس، من غير أي تغيير في شكل أو منطق المعاينة نفسها
+// على الشاشة (كل الـ CSS هنا جوه @media print فقط، وبيتشال فورًا بعد
+// الطباعة). زرار الإغلاق وزراير الأسفل (إغلاق/طباعة/واتساب) بس بيتخفوا من
+// نسخة الورق، وباقي كل البيانات والقيم المعروضة في المعاينة بتتطبع كاملة
+function printPayslipDetail(){
+  document.getElementById('payslip-print-style-temp')?.remove();
+  const style = document.createElement('style');
+  style.id = 'payslip-print-style-temp';
+  style.textContent = `
+    @page { size: A4; margin: 10mm; }
+    @media print {
+      body * { visibility:hidden !important; }
+      #payslip-detail-mo, #payslip-detail-mo * { visibility:visible !important; }
+      html, body { height:auto !important; margin:0 !important; padding:0 !important; }
+      /* مهم: visibility:hidden وحدها مابتشيلش مساحة العناصر التانية من
+         تدفق الصفحة (السايدبار، الهيدر، باقي المودالات، إلخ) — فكانت
+         بتفضل محتلة ارتفاع صفحة كاملة فاضية قبل كارت المرتب فعليًا، وده
+         كان بيطلّع صفحة أولى فاضية زيادة في الطباعة. الحل: نخفي كل عناصر
+         الـ body التانية بـ display:none (مش بس visibility) ما عدا كارت
+         المرتب نفسه، فيبدأ المحتوى فعليًا من أول الورقة */
+      body > *:not(#payslip-detail-mo) { display:none !important; }
+      #payslip-detail-mo {
+        position:static !important;
+        inset:auto !important;
+        background:none !important;
+        backdrop-filter:none !important;
+        padding:0 !important;
+        display:block !important;
+        z-index:auto !important;
+      }
+      #payslip-print-section {
+        position:static !important;
+        width:100% !important;
+        max-width:none !important;
+        max-height:none !important;
+        overflow:visible !important;
+        box-shadow:none !important;
+        border-radius:0 !important;
+        margin:0 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        color-adjust: exact !important;
+      }
+      #payslip-print-header { position:static !important; }
+      #payslip-close-btn, #payslip-actions-row { display:none !important; }
+      #sb-toggle, header { display:none !important; }
+    }
+  `;
+  document.head.appendChild(style);
+  const cleanup = ()=>{ document.getElementById('payslip-print-style-temp')?.remove(); window.removeEventListener('afterprint', cleanup); };
+  window.addEventListener('afterprint', cleanup);
+  window.print();
+  setTimeout(cleanup, 15000);
 }
 
 // ===== تفعيل/إلغاء خصم التأخير مباشرة من كارت تفاصيل المرتب =====
@@ -8826,7 +8892,7 @@ function pureSHA256(msg){
     }
   }
   msg+='';
-  while(msg.length%64-56){msg+=' ';}
+  while(msg.length%64-56){msg+=' ';}
   for(i=0;i<msg.length;i++){
     j=msg.charCodeAt(i);
     if(j>>8){return '';}
