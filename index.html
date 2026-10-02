@@ -4990,7 +4990,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
+    <div class="company">🏢 شركة حلوانى الغربية</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -5422,8 +5422,14 @@ function initLoanCheck(){
 function calcLoanCheck(){
   const eid=document.getElementById('lc-emp')?.value;const reqAmt=Number(document.getElementById('lc-amount')?.value||0);const result=document.getElementById('lc-result');const empty=document.getElementById('lc-empty');if(!eid){if(result)result.style.display='none';if(empty)empty.style.display='block';return;}
 
-  const e=DB.emp.find(x=>x.id===eid);if(!e)return;const slip=calcSlip(e);const gross=slip.gross;const dailyCost=gross/30;// أيام العمل الفعلي هذا الشهر
-  const attRecs=DB.att.filter(a=>a.eid===eid&&a.y===DB.cycle.y&&a.m===DB.cycle.m&&(a.st==='حضور'||!a.st||a.st==='إجازة اعتيادية'));const workedDays=attRecs.length;const earnedSoFar=dailyCost*workedDays;// السلف القائمة
+  const e=DB.emp.find(x=>x.id===eid);if(!e)return;const slip=calcSlip(e);const gross=slip.gross;const dailyCost=gross/30;
+  // أيام العمل الفعلي هذا الشهر — حتى تاريخ اليوم بس (تاريخ القطع)؛ أي يوم
+  // بعد النهاردة ميتحسبش في استحقاق السلفة خالص حتى لو كان إجازة اعتيادية
+  // مسجلة ومخصومة من الرصيد بالفعل (إجازة مستقبلية) — الإجازة تفضل شغالة
+  // عادي في نظام الإجازات ورصيدها، بس مجرد وجودها مش سبب لاحتسابها هنا قبل
+  // ما يجي تاريخها الفعلي. الشهر المختار نفسه يفضل زي ما هو بالظبط (DB.cycle)
+  const todayStrLC=getCairoTodayStr();
+  const attRecs=DB.att.filter(a=>a.eid===eid&&a.y===DB.cycle.y&&a.m===DB.cycle.m&&a.dt<=todayStrLC&&(a.st==='حضور'||!a.st||a.st==='إجازة اعتيادية'));const workedDays=attRecs.length;const earnedSoFar=dailyCost*workedDays;// السلف القائمة
   const existAdv=DB.adv.filter(a=>a.eid===eid&&a.status==='نشط').reduce((s,a)=>s+Number(a.rem||0),0);const netAvail=Math.max(0,earnedSoFar-existAdv);const canLoan=reqAmt>0?reqAmt<=netAvail:null;if(result) result.style.display='block';if(empty) empty.style.display='none';document.getElementById('lc-kpis').innerHTML=`
     ${kpiCard('payments','الراتب الشامل',fc(gross)+' ج.م','#0f2057','#eef2ff')}
     ${kpiCard('today','تكلفة اليوم',fc(Math.round(dailyCost))+' ج.م','#0ea5a0','#d1faf8')}
@@ -5449,8 +5455,11 @@ function calcLoanCheck(){
 
 function renderLoanTable(){
   const tbody=document.getElementById('lc-body');const emps=DB.emp.filter(e=>e.st==='نشط');if(!emps.length){tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:36px;color:#94a3b8"><span class="ms ms-xl" style="display:block;margin-bottom:8px">calculate</span>أضف موظفين</td></tr>';return;}
+  // تاريخ القطع — نفس منطق calcLoanCheck بالظبط: أي يوم بعد النهاردة ميتحسبش
+  // في جدول استحقاق السلفة لكل الموظفين، حتى لو كان إجازة مستقبلية مسجلة
+  const todayStrLT=getCairoTodayStr();
   tbody.innerHTML=emps.map(e=>{
-    const slip=calcSlip(e);const gross=slip.gross;const dailyCost=gross/30;const worked=DB.att.filter(a=>a.eid===e.id&&a.y===DB.cycle.y&&a.m===DB.cycle.m&&(a.st==='حضور'||!a.st)).length;const earned=dailyCost*worked;const advs=DB.adv.filter(a=>a.eid===e.id&&a.status==='نشط').reduce((s,a)=>s+Number(a.rem||0),0);const net=Math.max(0,earned-advs);return`<tr>
+    const slip=calcSlip(e);const gross=slip.gross;const dailyCost=gross/30;const worked=DB.att.filter(a=>a.eid===e.id&&a.y===DB.cycle.y&&a.m===DB.cycle.m&&a.dt<=todayStrLT&&(a.st==='حضور'||!a.st)).length;const earned=dailyCost*worked;const advs=DB.adv.filter(a=>a.eid===e.id&&a.status==='نشط').reduce((s,a)=>s+Number(a.rem||0),0);const net=Math.max(0,earned-advs);return`<tr>
       <td style="font-weight:700">${e.nm}<br/><span style="font-size:10.5px;color:#94a3b8">${e.cd||''}</span></td>
       <td><span style="background:#eef2ff;color:#0f2057;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700">${e.dp||'—'}</span></td>
       <td style="text-align:left;font-weight:700">${fc(Math.round(gross))} ج.م</td>
@@ -8814,7 +8823,7 @@ function pureSHA256(msg){
     }
   }
   msg+='';
-  while(msg.length%64-56){msg+=' ';}
+  while(msg.length%64-56){msg+=' ';}
   for(i=0;i<msg.length;i++){
     j=msg.charCodeAt(i);
     if(j>>8){return '';}
