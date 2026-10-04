@@ -4497,6 +4497,97 @@ function exportDrawsRepCSV(){
 
 // ===================== PRINT RECEIPTS =====================
 
+// ===== فهرس الموظفين في إيصالات الطباعة =====
+// صفحة (أو أكتر لو عدد الموظفين كبير) بتتحط قبل الإيصالات نفسها، فيها اسم
+// كل موظف + كود البصمة + رقم الصفحة اللي إيصاله موجود فيها بالظبط، بنفس
+// ترتيب الطباعة الحالي من غير أي تغيير فيه. الموظف اللي اسمه مش مكتوب فعليًا
+// (فاضي) بيتستبعد من قائمة الفهرس بس — لكن إيصاله لسه بيتطبع عادي وبياخد
+// رقم صفحة في التسلسل زي أي موظف تاني، عشان ترقيم باقي الموظفين يفضل صحيح.
+//
+// الصفحات اللي الفهرس نفسه بياخدها (K) بتتحسب بقياس فعلي لارتفاع الهيدر
+// وارتفاع صف واحد في عرض الطباعة الحقيقي (194مم — نفس عرض كارت الإيصال
+// وقت الطباعة بالظبط)، بدل ما نفترض رقم ثابت ممكن يختلف حسب خط المتصفح.
+// رقم صفحة كل موظف = K + ترتيبه في القائمة (بداية من 1) — بما إن كل إيصال
+// بياخد صفحة واحدة بالظبط (page-break-after:always لكل كارت، زي ما هو
+// مُصمم ومُختبر بالفعل في نظام الطباعة الحالي من غير أي تعديل فيه هنا)
+function buildIndexPages(emps, cycleLabel){
+  const namedList = [];
+  emps.forEach((e,i)=>{ if(e.nm && String(e.nm).trim()) namedList.push({e, origIdx:i}); });
+
+  // مفيش موظف باسم مكتوب فعليًا → مفيش فهرس خالص، وترقيم الإيصالات يبدأ من
+  // صفحة 1 عادي (زي ما كان الحال قبل إضافة الفهرس بالظبط)
+  if(namedList.length===0){
+    return { indexHtml:'', pageNumbers: emps.map((_,i)=>i+1) };
+  }
+
+  const thead = `<thead><tr>
+      <th style="text-align:right;font-size:11px;color:#4a5982;padding:6px 8px;border-bottom:2px solid #0f2057">اسم الموظف</th>
+      <th style="text-align:center;font-size:11px;color:#4a5982;padding:6px 8px;border-bottom:2px solid #0f2057">كود البصمة</th>
+      <th style="text-align:center;font-size:11px;color:#4a5982;padding:6px 8px;border-bottom:2px solid #0f2057">الصفحة</th>
+    </tr></thead>`;
+  const headerBlock = (isFirst)=> isFirst ? `
+    <div style="text-align:center;margin-bottom:14px">
+      <div style="font-size:22px;font-weight:800;color:#0f2057">${cycleLabel}</div>
+      <div style="font-size:13px;font-weight:700;color:#4a5982;margin-top:4px">فهرس إيصالات المرتبات</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">${thead}<tbody></tbody></table>` : `
+    <div style="text-align:center;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:700;color:#4a5982">فهرس إيصالات المرتبات (تابع) — ${cycleLabel}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">${thead}<tbody></tbody></table>`;
+  const rowHtml = (e, pageNum)=> `<tr>
+      <td style="text-align:right;font-size:11.5px;color:#0d1b3e;padding:5px 8px;border-bottom:1px dashed #eef1f8">${e.nm}</td>
+      <td style="text-align:center;font-size:11.5px;color:#4a5982;padding:5px 8px;border-bottom:1px dashed #eef1f8;direction:ltr">${e.cd||'—'}</td>
+      <td style="text-align:center;font-size:11.5px;font-weight:700;color:#0f2057;padding:5px 8px;border-bottom:1px dashed #eef1f8">${pageNum}</td>
+    </tr>`;
+
+  // ===== قياس فعلي في المتصفح (نفس عرض الطباعة 194مم) =====
+  const meas = document.createElement('div');
+  meas.style.cssText = 'position:fixed;left:-99999px;top:0;width:calc(194mm - 40px);visibility:hidden;font-family:\'Cairo\',sans-serif';
+  document.body.appendChild(meas);
+
+  const pageHeightProbe = document.createElement('div');
+  pageHeightProbe.style.cssText = 'height:281mm';
+  meas.appendChild(pageHeightProbe);
+  const usablePagePx = pageHeightProbe.offsetHeight;
+  meas.removeChild(pageHeightProbe);
+
+  meas.innerHTML = headerBlock(true);
+  const firstHeaderPx = meas.offsetHeight;
+  meas.innerHTML = headerBlock(false);
+  const contHeaderPx = meas.offsetHeight;
+  meas.innerHTML = `<table style="width:100%;border-collapse:collapse">${thead}<tbody>${rowHtml({nm:'عينة قياس',cd:'0000'},1)}</tbody></table>`;
+  const rowPx = meas.querySelector('tbody tr')?.offsetHeight || 20;
+
+  document.body.removeChild(meas);
+
+  const CARD_V_PADDING = 36; // نفس بادينج الكارت (18px أعلى + 18px أسفل) المستخدم فعليًا تحت
+  const contentBudget = Math.max(rowPx, usablePagePx - CARD_V_PADDING);
+  const rowsPerFirst = Math.max(1, Math.floor((contentBudget - firstHeaderPx) / rowPx));
+  const rowsPerCont = Math.max(1, Math.floor((contentBudget - contHeaderPx) / rowPx));
+
+  // تقسيم قائمة الموظفين (بالاسم) على عدد صفحات الفهرس اللازم
+  const chunks = [];
+  let idx = 0, first = true;
+  while(idx < namedList.length){
+    const size = first ? rowsPerFirst : rowsPerCont;
+    chunks.push(namedList.slice(idx, idx+size));
+    idx += size; first = false;
+  }
+  const K = chunks.length;
+
+  // رقم صفحة كل موظف (بالترتيب الكامل الأصلي، بما فيهم اللي من غير اسم)
+  const pageNumbers = emps.map((_,i)=> K + i + 1);
+
+  const indexHtml = chunks.map((chunk, pi)=>{
+    const rows = chunk.map(({e, origIdx})=> rowHtml(e, pageNumbers[origIdx])).join('');
+    const header = headerBlock(pi===0).replace('<tbody></tbody>', `<tbody>${rows}</tbody>`);
+    return `<div class="receipt-card" style="background:#fff;border:1px solid #e2eaf6;border-radius:14px;overflow:hidden;margin-bottom:18px;page-break-after:always;max-width:210mm;margin-left:auto;margin-right:auto;font-family:'Cairo',sans-serif;padding:18px 20px;box-sizing:border-box">${header}</div>`;
+  }).join('');
+
+  return { indexHtml, pageNumbers };
+}
+
 function renderReceipts(){
   const sel = document.getElementById('print-emp-sel');const act = DB.emp.filter(e=>e.st==='نشط');
   if(sel && sel.options.length<=1){
@@ -4510,7 +4601,12 @@ function renderReceipts(){
   const MAR2=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
   const cycleLabel = `${MAR2[DB.cycle.m-1]} ${DB.cycle.y}`;
 
-  container.innerHTML = emps.map(emp=>buildReceiptCard(emp, cycleLabel, filterEid!=='all')).join('');
+  // ===== فهرس الموظفين (اسم + كود بصمة + رقم صفحة) — بيتحط قبل الإيصالات
+  // نفسها؛ منطق بناء الإيصال نفسه (buildReceiptCard) متغيرش غير إضافة رقم
+  // الصفحة كسطر صغير زيادة بس =====
+  const { indexHtml, pageNumbers } = buildIndexPages(emps, cycleLabel);
+
+  container.innerHTML = indexHtml + emps.map((emp,i)=>buildReceiptCard(emp, cycleLabel, filterEid!=='all', pageNumbers[i])).join('');
   reportData = emps;
 }
 
@@ -4557,7 +4653,7 @@ function buildAttendanceCheckGrid(emp){
 // باقي الحقول (ساعات إضافية، يوم إضافي، غياب، خصم نقدي، المسحوبات، الإجمالي، الصافي) نقاط فاضية
 // عمدًا — عشان المحاسب يملاها يدويًا وقت المطابقة، زي ما هو متفق عليه بالظبط. النقاط دي مش نقص،
 // دي تصميم مقصود، والتعديل هنا بيقتصر على تنظيم الشكل وترتيبه بشكل احترافي مقاس A4.
-function buildReceiptCard(emp, cycleLabel, isSingleSelected){
+function buildReceiptCard(emp, cycleLabel, isSingleSelected, pageNum){
   const slip = calcSlip(emp);
   const allowArr = emp.allowances||[];
   const ini = (emp.nm||'?').trim().split(' ').map(w=>w[0]).slice(0,2).join('');
@@ -4634,6 +4730,7 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected){
         <div style="text-align:left">
           <div style="font-size:10px;color:#7dd8f5">رقم الإيصال</div>
           <div style="font-size:11.5px;font-weight:800;color:#fff;direction:ltr">${emp.cd||'—'}-${DB.cycle.y}${String(DB.cycle.m).padStart(2,'0')}</div>
+          ${pageNum?`<div style="font-size:9px;color:#93c5fd;margin-top:2px">صفحة ${pageNum}</div>`:''}
         </div>
       </div>
 
@@ -4764,6 +4861,15 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected){
          وده كان بيولّد صفحة فاضية زيادة قبل أول إيصال فعلي، وبيخلي باقي
          الإيصالات تتزحزح لصفحات غلط */
       #page-payroll > *:not(#print-section) { display:none !important; }
+      /* إضافة ضرورية عشان ترقيم الصفحات في فهرس الموظفين يفضل صحيح 100%:
+         عناصر position:fixed تانية في الصفحة (زي درج التفاصيل السريع
+         #emp-dr) كانت بتفضل محتلة صفحة طباعة كاملة فاضية في الأول رغم
+         إنها visibility:hidden ومُزاحة بره الشاشة بـ transform — لأن
+         Chrome بيتعامل مع عناصر position:fixed بشكل خاص وقت تقسيم صفحات
+         الطباعة. الحل: نخفي أي عنصر تاني مباشر جوه body غير .ca (الحاوية
+         الأساسية لكل صفحات البرنامج) بـ display:none وقت الطباعة بس —
+         بدون أي تأثير على عمل الدُرج أو أي مودال تاني في الاستخدام العادي */
+      body > *:not(.ca) { display:none !important; }
       #receipts-preview { position:static !important; width:100% !important; margin:0 !important; padding:0 !important; }
       #print-section { position:static !important; }
       #print-section > div:first-child { display:none !important; } /* شريط الاختيار وزر الطباعة نفسه ميتطبعش */
@@ -4981,7 +5087,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏬 شركة حلوانى الغربية</div>
+    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -8900,7 +9006,7 @@ function pureSHA256(msg){
     }
   }
   msg+='';
-  while(msg.length%64-56){msg+=' ';}
+  while(msg.length%64-56){msg+=' ';}
   for(i=0;i<msg.length;i++){
     j=msg.charCodeAt(i);
     if(j>>8){return '';}
