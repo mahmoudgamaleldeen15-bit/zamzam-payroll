@@ -1933,6 +1933,79 @@ async function fbPull(key){
   }
 }
 
+// =====================================================
+// 🔒 قرار المحاسب المعتمد = مصدر وحيد للحقيقة، ولا يجوز لأي جلب بيانات
+// (تلقائي أو يدوي) من Firebase أن يستبدله بنسخة أقدم أو غير معتمدة —
+// حتى لو كان الجلب نفسه مطلوبًا ومؤكَّدًا (زر "جلب البيانات من Firebase").
+// هنا بنعمل دمج (Merge) للجدولين الحرجين "issues" و"att" بدل الاستبدال
+// الكامل الأعمى اللي كان حاصل قبل كده — أي سجل محلي "مقفول" (قرار محاسب
+// حقيقي معتمد) بيفضل كما هو، ولا يُستبدل إلا بقرار أحدث فعليًا (decidedAt
+// أجدد) من محاسب حقيقي تاني — ده الحارس (Guard) على مستوى الـData Logic
+// نفسه، مش مجرد منع من الواجهة =====
+// isLockedIssue() معرّفة تحت (بجانب hasAccountantLock) — ومتاحة هنا بسبب
+// الـ hoisting الطبيعي لتعريفات function في جافاسكريبت
+function mergeIssuesFromRemote(localIssues, remoteIssues){
+  const local  = Array.isArray(localIssues)  ? localIssues  : [];
+  const remote = Array.isArray(remoteIssues) ? remoteIssues : [];
+  const localById = {};
+  local.forEach(i=>{ if(i && i.id) localById[i.id] = i; });
+
+  const merged = [];
+  const seenIds = {};
+  remote.forEach(r=>{
+    if(!r || !r.id) return;
+    seenIds[r.id] = true;
+    const l = localById[r.id];
+    if(l && isLockedIssue(l)){
+      // عندنا قرار محاسب معتمد محليًا لنفس السجل — لا نستبدله بنسخة
+      // Firebase إلا لو هي كمان قرار محاسب حقيقي وأحدث فعليًا بالتاريخ
+      // (يعني قرار لاحق اتخذ من جهاز تاني)، غير ذلك القرار المحلي يفضل كما هو
+      if(isLockedIssue(r) && r.decidedAt && l.decidedAt && r.decidedAt > l.decidedAt){
+        merged.push(r);
+      } else {
+        merged.push(l);
+      }
+    } else {
+      merged.push(r);
+    }
+  });
+  // أي سجل محلي معتمد (مقفول) غير موجود خالص في نسخة Firebase المجلوبة
+  // (مثلاً لسه الرفعة بتاعته ما وصلتش هناك) — نحافظ عليه بدل ما يضيع قرار محاسب
+  local.forEach(l=>{
+    if(l && l.id && !seenIds[l.id] && isLockedIssue(l)) merged.push(l);
+  });
+  return merged;
+}
+
+function mergeAttFromRemote(localAtt, remoteAtt, issuesForLockCheck){
+  const local  = Array.isArray(localAtt)  ? localAtt  : [];
+  const remote = Array.isArray(remoteAtt) ? remoteAtt : [];
+
+  // كل يوم (موظف+تاريخ) عنده قرار محاسب معتمد ومقفول حاليًا محليًا —
+  // سجل حضوره بيفضل من النسخة المحلية تمامًا، بدون أي استبدال من Firebase
+  const lockedDays = {};
+  (issuesForLockCheck||[]).forEach(i=>{ if(isLockedIssue(i)) lockedDays[i.eid+'|'+i.dt] = true; });
+  if(!Object.keys(lockedDays).length) return remote;
+
+  const localByKey = {};
+  local.forEach(a=>{ if(a) localByKey[a.eid+'|'+a.dt] = a; });
+
+  const merged = remote.map(r=>{
+    if(!r) return r;
+    const key = r.eid+'|'+r.dt;
+    return (lockedDays[key] && localByKey[key]) ? localByKey[key] : r;
+  });
+
+  // أي سجل حضور محلي ليوم مقفول ومش موجود خالص في نسخة Firebase المجلوبة
+  // (لسه رفعته ما وصلتش) — بنضيفه بدل ما يضيع
+  const mergedKeys = {};
+  merged.forEach(m=>{ if(m) mergedKeys[m.eid+'|'+m.dt] = true; });
+  local.forEach(l=>{
+    if(l && lockedDays[l.eid+'|'+l.dt] && !mergedKeys[l.eid+'|'+l.dt]) merged.push(l);
+  });
+  return merged;
+}
+
 // ===== sv() الجديدة: تحفظ localStorage + ترفع Firebase =====
 // (تم دمج sv مع النسخة الموحدة بالأسفل — لمنع تعريفها مرتين)
 
@@ -1992,8 +2065,14 @@ async function fbDownloadAll(){
   for(const k of FB_SYNC_KEYS){
     const data = await fbPull(k);
     if(data !== null){
-      localStorage.setItem('zz_'+k, JSON.stringify(data));
-      DB[k] = data;
+      // 🔒 حتى في الجلب اليدوي الكامل والمؤكَّد ده — قرار المحاسب المعتمد
+      // (issues) وسجل الحضور المرتبط بيه (att) لا يُستبدلان بنسخة Firebase
+      // أقدم أو غير معتمدة؛ الدمج الآمن بيحافظ على أي قرار محاسب حقيقي محليًا
+      let dataToApply = data;
+      if(k==='issues') dataToApply = mergeIssuesFromRemote(DB.issues, data);
+      else if(k==='att') dataToApply = mergeAttFromRemote(DB.att, data, DB.issues);
+      localStorage.setItem('zz_'+k, JSON.stringify(dataToApply));
+      DB[k] = dataToApply;
       success++;
     }
   }
@@ -2164,15 +2243,24 @@ async function fbAutoDownloadChanges(fbTs){
       // نسجّل إننا شفنا آخر نسخة موثوقة من الجدول ده دلوقتي (سواء اتغيرت أو لأ)
       if(_keyTs && _keyTs[k] && _keyTs[k].ts) _newLocalKeyTs[k] = _keyTs[k].ts;
 
+      // 🔒 الحارس الأخير على مستوى الـData Logic نفسه: حتى لو عدّت كل
+      // حمايات التوقيت فوق دي (تأخير شبكة طويل، جهاز تاني، إلخ)، قرار
+      // المحاسب المعتمد في "issues" وسجل الحضور المرتبط بيه في "att" ما
+      // بيُستبدلوش أبدًا بنسخة Firebase أقدم أو غير معتمدة — دمج آمن بدل
+      // الاستبدال الكامل الأعمى، بغض النظر عن سبب أو مصدر عملية الجلب دي
+      let dataToApply = fbData;
+      if(k==='issues') dataToApply = mergeIssuesFromRemote(DB.issues, fbData);
+      else if(k==='att') dataToApply = mergeAttFromRemote(DB.att, fbData, DB.issues);
+
       // مقارنة الأحجام والبيانات
-      const fbCount    = Array.isArray(fbData) ? fbData.length : 1;
+      const fbCount    = Array.isArray(dataToApply) ? dataToApply.length : 1;
       const localCount = Array.isArray(localData) ? localData.length : (localData?1:0);
-      
-      // لو في فرق → خذ من Firebase
-      if(JSON.stringify(fbData) !== JSON.stringify(localData)){
-        localStorage.setItem('zz_'+k, JSON.stringify(fbData));
-        DB[k] = fbData;
-        
+
+      // لو في فرق → خذ من Firebase (بعد الدمج الآمن لو كان الجدول issues/att)
+      if(JSON.stringify(dataToApply) !== JSON.stringify(localData)){
+        localStorage.setItem('zz_'+k, JSON.stringify(dataToApply));
+        DB[k] = dataToApply;
+
         // حساب التغيير
         const diff = fbCount - localCount;
         const label = {
@@ -5165,7 +5253,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏬 شركة حلوانى الغربية</div>
+    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -6043,11 +6131,15 @@ function computeRestCycle(days, restDayNum){
 // يعيد توليد إجراء، ولا يرجّعه لأي حالة سابقة) — التعديل الوحيد المسموح بيه
 // هو تعديل يدوي صريح من المحاسب نفسه من خلال شاشات النظام (editPastDecision/
 // resolveCheckoutOnlyIssue/convertAttStatus...)، وده مش بيعدي من هنا خالص
+// ===== فحص قفل سجل إجراء واحد (معتمد من محاسب حقيقي) — مصدر وحيد
+// للتعريف، يُستخدم من hasAccountantLock وبرضه من دمج بيانات Firebase =====
+function isLockedIssue(iss){
+  return !!(iss && iss.decidedBy && iss.decidedBy!=='نظام'
+    && (iss.status==='تمت الموافقة' || iss.status==='تم التعديل' || iss.status==='تم الاعتماد يدويًا' || iss.status==='تم التجاهل'));
+}
+
 function hasAccountantLock(eid, dt){
-  return DB.issues.some(i=>
-    i.eid===eid && i.dt===dt && i.decidedBy && i.decidedBy!=='نظام'
-    && (i.status==='تمت الموافقة' || i.status==='تم التعديل' || i.status==='تم الاعتماد يدويًا' || i.status==='تم التجاهل')
-  );
+  return DB.issues.some(i=> i.eid===eid && i.dt===dt && isLockedIssue(i));
 }
 
 // ===== فحص شامل لشهر الدورة الحالية — دورة الـ6 أيام + إشعارات + متابعة الإجراءات =====
@@ -9442,7 +9534,7 @@ function pureSHA256(msg){
     }
   }
   msg+='';
-  while(msg.length%64-56){msg+=' ';}
+  while(msg.length%64-56){msg+=' ';}
   for(i=0;i<msg.length;i++){
     j=msg.charCodeAt(i);
     if(j>>8){return '';}
