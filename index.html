@@ -7548,6 +7548,23 @@ function setMonthlyExpenseField(field, value){
   rec[field] = Number(value)||0;
   sv('monthlyExpenses', DB.monthlyExpenses);
 }
+// ===== كتابة حرة في حقول الإدخال اليدوي (الفرع الرئيسي / شبراملس) =====
+// بدون إعادة بناء القسم بالكامل مع كل حرف (كان ده سبب فقدان التركيز من
+// الحقل أثناء الكتابة المباشرة، فيبقى التعديل مقتصر فعليًا على سهم الأعداد
+// Spinner بس) — هنا بنحدّث القيمة المحفوظة ونحدّث الإجمالي النهائي فقط
+// بدون التأثير على عنصر الحقل نفسه، فتفضل الكتابة متواصلة وطبيعية
+function onMonthlyExpenseInput(field, inputEl){
+  let v = inputEl.value.replace(/[^\d.]/g,'');
+  const parts = v.split('.');
+  if(parts.length>2) v = parts[0]+'.'+parts.slice(1).join('');
+  if(inputEl.value !== v) inputEl.value = v;
+  setMonthlyExpenseField(field, v);
+  const y = DB.cycle.y, m = DB.cycle.m;
+  const rec = getMonthlyExpenseRec(y, m);
+  const total = getFactoryNetPayroll() + getMonthlyRentTotal() + Number(rec.mainBranch||0) + Number(rec.shubramlis||0);
+  const totalEl = document.getElementById('me-total-amount');
+  if(totalEl) totalEl.textContent = fc(total) + ' ج.م';
+}
 function reportExpenses(el){
   const y = DB.cycle.y, m = DB.cycle.m;
   const factoryNet = getFactoryNetPayroll();
@@ -7572,16 +7589,16 @@ function reportExpenses(el){
     </div>
     <div style="background:#fff;border:1px solid #eaeffa;border-radius:14px;padding:16px">
       <div style="font-size:12px;color:#64748b;font-weight:700;margin-bottom:6px">مرتبات الفرع الرئيسي <span style="font-size:10px;color:#94a3b8">(إدخال يدوي)</span></div>
-      <input type="number" id="me-mainBranch" value="${mainBranch}" placeholder="0" oninput="setMonthlyExpenseField('mainBranch', this.value); renderReport('expenses')" style="width:100%;padding:8px 10px;border:1px solid #dde3f0;border-radius:8px;font-family:Cairo,sans-serif;font-size:15px;font-weight:800;color:#0f2057;box-sizing:border-box">
+      <input type="text" inputmode="decimal" id="me-mainBranch" value="${mainBranch||''}" placeholder="0" oninput="onMonthlyExpenseInput('mainBranch', this)" style="width:100%;padding:8px 10px;border:1px solid #dde3f0;border-radius:8px;font-family:Cairo,sans-serif;font-size:15px;font-weight:800;color:#0f2057;box-sizing:border-box">
     </div>
     <div style="background:#fff;border:1px solid #eaeffa;border-radius:14px;padding:16px">
       <div style="font-size:12px;color:#64748b;font-weight:700;margin-bottom:6px">مرتبات فرع شبراملس <span style="font-size:10px;color:#94a3b8">(إدخال يدوي)</span></div>
-      <input type="number" id="me-shubramlis" value="${shubramlis}" placeholder="0" oninput="setMonthlyExpenseField('shubramlis', this.value); renderReport('expenses')" style="width:100%;padding:8px 10px;border:1px solid #dde3f0;border-radius:8px;font-family:Cairo,sans-serif;font-size:15px;font-weight:800;color:#0f2057;box-sizing:border-box">
+      <input type="text" inputmode="decimal" id="me-shubramlis" value="${shubramlis||''}" placeholder="0" oninput="onMonthlyExpenseInput('shubramlis', this)" style="width:100%;padding:8px 10px;border:1px solid #dde3f0;border-radius:8px;font-family:Cairo,sans-serif;font-size:15px;font-weight:800;color:#0f2057;box-sizing:border-box">
     </div>
   </div>
   <div style="background:linear-gradient(135deg,#0f2057,#1e3a8a);border-radius:16px;padding:22px;text-align:center;margin-bottom:18px">
     <div style="font-size:13px;color:#c7d3f0;font-weight:700;margin-bottom:6px">إجمالي مصروفات المصنع والفروع والإيجار لشهر ${MAR[m-1]} سنة ${y}</div>
-    <div style="font-size:28px;font-weight:800;color:#fff">${fc(total)} ج.م</div>
+    <div id="me-total-amount" style="font-size:28px;font-weight:800;color:#fff">${fc(total)} ج.م</div>
   </div>
   <div style="text-align:left">
     <button class="btn bg" style="background:#eef2ff;color:#0f2057" onclick="printMonthlyExpenses()"><span class="ms ms-sm">print</span>🖨️ طباعة مصروفات الشهر</button>
