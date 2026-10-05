@@ -643,6 +643,7 @@ body.auth-mode {
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn bg" onclick="exportRentCSV()"><span class="ms ms-sm">download</span>تصدير CSV</button>
       <button class="btn bg" onclick="openArchiveModal()"><span class="ms ms-sm">inventory_2</span>الأرشيف</button>
+      <button class="btn bg" style="background:#fef3c7;color:#92400e" onclick="printRentStatement()"><span class="ms ms-sm">print</span>🖨️ طباعة الإيجارات</button>
       <button class="btn bn" onclick="openRentMo()"><span class="ms ms-sm">add_home</span>إضافة عقد إيجار</button>
     </div>
   </div>
@@ -884,6 +885,7 @@ body.auth-mode {
     <button class="tb" id="rt-rent"        onclick="switchReport('rent')"><span class="ms ms-sm">apartment</span> الإيجارات</button>
     <button class="tb" id="rt-draws"      onclick="switchReport('draws')"><span class="ms ms-sm">payments</span> المسحوبات</button>
     <button class="tb" id="rt-charity"     onclick="switchReport('charity')"><span class="ms ms-sm">volunteer_activism</span> الصدقات</button>
+    <button class="tb" id="rt-expenses"    onclick="switchReport('expenses')"><span class="ms ms-sm">account_balance_wallet</span> مصروفات الشهر</button>
   </div>
 
   <!-- Report Content -->
@@ -1756,6 +1758,7 @@ const DB={
   issues:JSON.parse(localStorage.getItem('zz_issues')||'[]'),
   payDisburse:JSON.parse(localStorage.getItem('zz_payDisburse')||'[]'),
   charityRecv:JSON.parse(localStorage.getItem('zz_charityRecv')||'[]'),
+  monthlyExpenses:JSON.parse(localStorage.getItem('zz_monthlyExpenses')||'[]'),
 };const MAR=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];const PGS={dashboard:'لوحة التحكم',employees:'الموظفون',payroll:'كشف المرتبات',attendance:'الحضور والأوفرتايم',advances:'السلف والاستقطاعات',draws:'المسحوبات',rent:'الإيجارات الشهرية',formulas:'القواعد والإعدادات',charity:'وحدة الصدقات',reports:'مركز التقارير',leave:'الإجازات الاعتيادية',restdays:'الراحات الأسبوعية',loancheck:'استحقاق السلفة',archive:'الأرشيف',actiontracking:'متابعة الإجراءات'};// =====================================================
 // Firebase Hybrid Sync — زمزم Payroll
 // localStorage (primary) + Firebase (cloud backup/sync)
@@ -1772,7 +1775,7 @@ const FB_CONFIG = {
 };
 
 // الـ DB keys اللي بتتزامن
-const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives','issues','payDisburse','charityRecv'];
+const FB_SYNC_KEYS = ['emp','att','adv','draws','chr','rent','rentArchive','rules','cycle','leaves','archives','issues','payDisburse','charityRecv','monthlyExpenses'];
 
 let fbApp = null;
 let fbDB  = null;
@@ -7505,7 +7508,7 @@ function openAbout(){
 
 // ===================== REPORTS ENGINE =====================
 const MONTHS_AR_R = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];let currentReport = 'payroll';let reportData = [];function switchReport(type){
-  currentReport = type;['payroll','employees','attendance','daily','advances','rent','draws','charity'].forEach(t=>{
+  currentReport = type;['payroll','employees','attendance','daily','advances','rent','draws','charity','expenses'].forEach(t=>{
     const btn = document.getElementById('rt-'+t);if(btn) btn.classList.toggle('on', t===type);});renderReport(type);}
 
 function renderReport(type){
@@ -7518,7 +7521,222 @@ function renderReport(type){
     rent:reportRent,
     draws:reportDraws,
     charity:reportCharity,
+    expenses:reportExpenses,
   };if(handlers[type]) handlers[type](el);}
+
+// ===== مصروفات الشهر — قسم مستقل داخل مركز التقارير =====
+// مرتبط بالشهر/السنة المحددين حاليًا (DB.cycle)، ويقرأ فقط من قيم جاهزة
+// موجودة بالفعل في النظام (صافي المرتبات + إجمالي الإيجارات) بدون أي
+// إعادة حساب مستقل قد يختلف عن القيم المعروضة أصلاً في تاباتها
+function getFactoryNetPayroll(){
+  // نفس حساب "صافي المرتبات" المعروض فعليًا في تقرير الرواتب — بدون تكرار منطق جديد
+  const act = DB.emp.filter(e=>e.st==='نشط');
+  return act.reduce((s,e)=>s+(calcSlip(e).net||0),0);
+}
+function getMonthlyRentTotal(){
+  // نفس حساب "إجمالي الإيجارات الشهر" المعروض فعليًا في تاب الإيجارات — بدون تكرار منطق جديد
+  const act = DB.rent.filter(r=>r.status==='نشط');
+  return act.reduce((s,r)=>s+Number(r.curr||r.base||0),0);
+}
+function getMonthlyExpenseRec(y, m){
+  return DB.monthlyExpenses.find(r=>Number(r.y)===Number(y)&&Number(r.m)===Number(m)) || {y,m,mainBranch:0,shubramlis:0};
+}
+function setMonthlyExpenseField(field, value){
+  const y = DB.cycle.y, m = DB.cycle.m;
+  let rec = DB.monthlyExpenses.find(r=>Number(r.y)===y&&Number(r.m)===m);
+  if(!rec){ rec = {id:uid(), y, m, mainBranch:0, shubramlis:0}; DB.monthlyExpenses.push(rec); }
+  rec[field] = Number(value)||0;
+  sv('monthlyExpenses', DB.monthlyExpenses);
+}
+function reportExpenses(el){
+  const y = DB.cycle.y, m = DB.cycle.m;
+  const factoryNet = getFactoryNetPayroll();
+  const rentTotal = getMonthlyRentTotal();
+  const rec = getMonthlyExpenseRec(y, m);
+  const mainBranch = Number(rec.mainBranch)||0;
+  const shubramlis = Number(rec.shubramlis)||0;
+  const total = factoryNet + rentTotal + mainBranch + shubramlis;
+  el.innerHTML = `
+  <div style="margin-bottom:16px">
+    <div style="font-size:14px;font-weight:800;color:#0f2057">مصروفات المصنع والفروع والإيجار لشهر ${MAR[m-1]} سنة ${y}</div>
+    <div style="font-size:11.5px;color:#94a3b8;margin-top:3px">مرتبطة تلقائيًا بالشهر والسنة المحددين حاليًا في مركز التقارير</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-bottom:18px">
+    <div style="background:#fff;border:1px solid #eaeffa;border-radius:14px;padding:16px">
+      <div style="font-size:12px;color:#64748b;font-weight:700;margin-bottom:6px">مرتبات المصنع <span style="font-size:10px;color:#94a3b8">(تلقائي — صافي المرتبات)</span></div>
+      <div style="font-size:18px;font-weight:800;color:#16a34a">${fc(factoryNet)} ج.م</div>
+    </div>
+    <div style="background:#fff;border:1px solid #eaeffa;border-radius:14px;padding:16px">
+      <div style="font-size:12px;color:#64748b;font-weight:700;margin-bottom:6px">إجمالي إيجارات الشهر <span style="font-size:10px;color:#94a3b8">(تلقائي — من تاب الإيجارات)</span></div>
+      <div style="font-size:18px;font-weight:800;color:#d97706">${fc(rentTotal)} ج.م</div>
+    </div>
+    <div style="background:#fff;border:1px solid #eaeffa;border-radius:14px;padding:16px">
+      <div style="font-size:12px;color:#64748b;font-weight:700;margin-bottom:6px">مرتبات الفرع الرئيسي <span style="font-size:10px;color:#94a3b8">(إدخال يدوي)</span></div>
+      <input type="number" id="me-mainBranch" value="${mainBranch}" placeholder="0" oninput="setMonthlyExpenseField('mainBranch', this.value); renderReport('expenses')" style="width:100%;padding:8px 10px;border:1px solid #dde3f0;border-radius:8px;font-family:Cairo,sans-serif;font-size:15px;font-weight:800;color:#0f2057;box-sizing:border-box">
+    </div>
+    <div style="background:#fff;border:1px solid #eaeffa;border-radius:14px;padding:16px">
+      <div style="font-size:12px;color:#64748b;font-weight:700;margin-bottom:6px">مرتبات فرع شبراملس <span style="font-size:10px;color:#94a3b8">(إدخال يدوي)</span></div>
+      <input type="number" id="me-shubramlis" value="${shubramlis}" placeholder="0" oninput="setMonthlyExpenseField('shubramlis', this.value); renderReport('expenses')" style="width:100%;padding:8px 10px;border:1px solid #dde3f0;border-radius:8px;font-family:Cairo,sans-serif;font-size:15px;font-weight:800;color:#0f2057;box-sizing:border-box">
+    </div>
+  </div>
+  <div style="background:linear-gradient(135deg,#0f2057,#1e3a8a);border-radius:16px;padding:22px;text-align:center;margin-bottom:18px">
+    <div style="font-size:13px;color:#c7d3f0;font-weight:700;margin-bottom:6px">إجمالي مصروفات المصنع والفروع والإيجار لشهر ${MAR[m-1]} سنة ${y}</div>
+    <div style="font-size:28px;font-weight:800;color:#fff">${fc(total)} ج.م</div>
+  </div>
+  <div style="text-align:left">
+    <button class="btn bg" style="background:#eef2ff;color:#0f2057" onclick="printMonthlyExpenses()"><span class="ms ms-sm">print</span>🖨️ طباعة مصروفات الشهر</button>
+  </div>`;
+}
+function printMonthlyExpenses(){
+  const y = DB.cycle.y, m = DB.cycle.m;
+  const rentTotal = getMonthlyRentTotal();
+  const rec = getMonthlyExpenseRec(y, m);
+  const mainBranch = Number(rec.mainBranch)||0;
+  const shubramlis = Number(rec.shubramlis)||0;
+  const dateStr = new Date().toLocaleDateString('ar-EG');
+
+  // مهم جدًا: "مرتبات المصنع" والإجمالي النهائي يُتركان فاضيين في نسخة
+  // الطباعة فقط (للكتابة اليدوية بالقلم) — القيمة الفعلية داخل النظام
+  // (مرتبات المصنع على الشاشة في reportExpenses أعلاه) لا تتأثر إطلاقًا
+  const html = `
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:17px;font-weight:800;color:#0f2057">مصروفات الشهر</div>
+      <div style="font-size:13.5px;font-weight:700;color:#334155;margin-top:4px">لشهر ${MAR[m-1]} سنة ${y}</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:3px">تاريخ الطباعة: ${dateStr}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="background:#eef2ff">
+          <th style="text-align:right;padding:10px;border-bottom:2px solid #0f2057;font-size:13px;color:#0f2057">البيان</th>
+          <th style="text-align:left;padding:10px;border-bottom:2px solid #0f2057;font-size:13px;color:#0f2057">الإجمالي</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding:16px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;font-weight:700">مرتبات المصنع</td>
+          <td style="padding:16px 10px;border-bottom:1px solid #e5e7eb;height:36px"></td>
+        </tr>
+        <tr>
+          <td style="padding:12px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;font-weight:700">إجمالي إيجارات الشهر</td>
+          <td style="text-align:left;padding:12px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;font-weight:700" dir="ltr">${fc(rentTotal)} ج.م</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;font-weight:700">مرتبات الفرع الرئيسي</td>
+          <td style="text-align:left;padding:12px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;font-weight:700" dir="ltr">${fc(mainBranch)} ج.م</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 10px;border-bottom:2px solid #0f2057;font-size:13px;font-weight:700">مرتبات فرع شبراملس</td>
+          <td style="text-align:left;padding:12px 10px;border-bottom:2px solid #0f2057;font-size:13px;font-weight:700" dir="ltr">${fc(shubramlis)} ج.م</td>
+        </tr>
+        <tr>
+          <td style="padding:18px 10px;font-size:14.5px;font-weight:800;color:#0f2057">إجمالي مصروفات المصنع والفروع والإيجار</td>
+          <td style="padding:18px 10px;height:40px"></td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="margin-top:16px;font-size:10.5px;color:#94a3b8;text-align:center">* خانة "مرتبات المصنع" والإجمالي النهائي تُكتبان يدويًا بعد اعتماد كشف المرتبات الفعلي للشهر</div>`;
+
+  document.getElementById('expenses-print-style-temp')?.remove();
+  document.getElementById('expenses-print-section')?.remove();
+
+  const style = document.createElement('style');
+  style.id = 'expenses-print-style-temp';
+  style.textContent = `
+    @media print{
+      body > *:not(#expenses-print-section){ display:none !important; }
+      #expenses-print-section{
+        display:block !important; position:static !important; visibility:visible !important;
+        width:100%; margin:0; padding:14mm;
+      }
+      #expenses-print-section table{ page-break-inside:auto; width:100%; }
+      #expenses-print-section tr{ page-break-inside:avoid; }
+      #expenses-print-section thead{ display:table-header-group; }
+      @page{ size:A4; margin:10mm; }
+    }
+    @media screen{ #expenses-print-section{ display:none; } }
+  `;
+  document.head.appendChild(style);
+
+  const section = document.createElement('div');
+  section.id = 'expenses-print-section';
+  section.innerHTML = html;
+  document.body.appendChild(section);
+
+  const cleanup = () => { section.remove(); style.remove(); window.removeEventListener('afterprint', cleanup); };
+  window.addEventListener('afterprint', cleanup);
+
+  window.print();
+}
+
+// ===== طباعة الإيجارات الشهرية — Read-Only، مستقلة تمامًا، لا تعدّل أي بيانات =====
+function printRentStatement(){
+  const y = DB.cycle.y, m = DB.cycle.m;
+  const act = DB.rent.filter(r=>r.status==='نشط');
+  const total = act.reduce((s,r)=>s+Number(r.curr||r.base||0),0);
+  const dateStr = new Date().toLocaleDateString('ar-EG');
+
+  const rowsHtml = act.map((r,i)=>`
+    <tr>
+      <td style="text-align:center;padding:7px 8px;border-bottom:1px solid #e5e7eb;font-size:12px">${i+1}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e7eb;font-size:12.5px;font-weight:700">${r.unit||'—'}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e7eb;font-size:12px">${r.tenant||'—'}</td>
+      <td style="text-align:left;padding:7px 10px;border-bottom:1px solid #e5e7eb;font-size:12.5px;font-weight:700" dir="ltr">${fc(r.curr||r.base)} ج.م</td>
+    </tr>`).join('');
+
+  const html = `
+    <div style="text-align:center;margin-bottom:14px">
+      <div style="font-size:16px;font-weight:800;color:#0f2057">الإيجارات الشهرية لشهر ${MAR[m-1]} لسنة ${y}</div>
+      <div style="font-size:11.5px;color:#64748b;margin-top:3px">تاريخ الطباعة: ${dateStr} — عدد العقود النشطة: ${act.length}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="background:#fef3c7">
+          <th style="text-align:center;padding:8px;border-bottom:2px solid #d97706;font-size:12px;color:#92400e;width:40px">م</th>
+          <th style="text-align:right;padding:8px;border-bottom:2px solid #d97706;font-size:12px;color:#92400e">الوحدة</th>
+          <th style="text-align:right;padding:8px;border-bottom:2px solid #d97706;font-size:12px;color:#92400e">المستأجر</th>
+          <th style="text-align:left;padding:8px;border-bottom:2px solid #d97706;font-size:12px;color:#92400e">قيمة الإيجار</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml || `<tr><td colspan="4" style="text-align:center;padding:30px;color:#94a3b8">لا يوجد عقود إيجار نشطة</td></tr>`}
+        <tr>
+          <td colspan="3" style="padding:12px 10px;font-size:13.5px;font-weight:800;color:#92400e;border-top:2px solid #d97706">إجمالي الإيجارات</td>
+          <td style="text-align:left;padding:12px 10px;font-size:14px;font-weight:800;color:#92400e;border-top:2px solid #d97706" dir="ltr">${fc(total)} ج.م</td>
+        </tr>
+      </tbody>
+    </table>`;
+
+  document.getElementById('rent-print-style-temp')?.remove();
+  document.getElementById('rent-print-section')?.remove();
+
+  const style = document.createElement('style');
+  style.id = 'rent-print-style-temp';
+  style.textContent = `
+    @media print{
+      body > *:not(#rent-print-section){ display:none !important; }
+      #rent-print-section{
+        display:block !important; position:static !important; visibility:visible !important;
+        width:100%; margin:0; padding:14mm;
+      }
+      #rent-print-section table{ page-break-inside:auto; width:100%; }
+      #rent-print-section tr{ page-break-inside:avoid; }
+      #rent-print-section thead{ display:table-header-group; }
+      @page{ size:A4; margin:10mm; }
+    }
+    @media screen{ #rent-print-section{ display:none; } }
+  `;
+  document.head.appendChild(style);
+
+  const section = document.createElement('div');
+  section.id = 'rent-print-section';
+  section.innerHTML = html;
+  document.body.appendChild(section);
+
+  const cleanup = () => { section.remove(); style.remove(); window.removeEventListener('afterprint', cleanup); };
+  window.addEventListener('afterprint', cleanup);
+
+  window.print();
+}
 
 // ===== كارت KPI مشترك =====
 // =====================================================
