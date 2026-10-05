@@ -1981,27 +1981,56 @@ function mergeAttFromRemote(localAtt, remoteAtt, issuesForLockCheck){
   const local  = Array.isArray(localAtt)  ? localAtt  : [];
   const remote = Array.isArray(remoteAtt) ? remoteAtt : [];
 
-  // كل يوم (موظف+تاريخ) عنده قرار محاسب معتمد ومقفول حاليًا محليًا —
-  // سجل حضوره بيفضل من النسخة المحلية تمامًا، بدون أي استبدال من Firebase
+  // المصدر الأول للقفل (موجود من قبل، بدون أي تغيير في سلوكه): يوم
+  // (موظف+تاريخ) عنده قرار محاسب معتمد في "متابعة الإجراءات" — سجل حضوره
+  // بيفضل من النسخة المحلية تمامًا، بدون أي استبدال من Firebase
   const lockedDays = {};
   (issuesForLockCheck||[]).forEach(i=>{ if(isLockedIssue(i)) lockedDays[i.eid+'|'+i.dt] = true; });
-  if(!Object.keys(lockedDays).length) return remote;
 
   const localByKey = {};
   local.forEach(a=>{ if(a) localByKey[a.eid+'|'+a.dt] = a; });
 
+  // 🔒 إضافة جديدة: المصدر الثاني للقفل — سجل الحضور نفسه معدَّل يدويًا
+  // مباشرة (convertedBy/editedBy/addedBy)، حتى لو مفيش سجل "متابعة
+  // إجراءات" مرتبط باليوم ده خالص (مثلاً تعديل مباشر من تاب الحضور على
+  // يوم جديد مالوش تنبيه أصلاً) — ده كان الثغرة اللي بتسمح لمزامنة
+  // Firebase القادمة من حفظ أي بيانات تانية في البرنامج إنها ترجّع قرار
+  // المحاسب لحالته الافتراضية القديمة
+  function isLocalLocked(l){
+    return !!(l && (lockedDays[l.eid+'|'+l.dt] || isLockedAttRecord(l)));
+  }
+
+  if(!local.some(isLocalLocked)) return remote;
+
   const merged = remote.map(r=>{
     if(!r) return r;
     const key = r.eid+'|'+r.dt;
-    return (lockedDays[key] && localByKey[key]) ? localByKey[key] : r;
+    const l = localByKey[key];
+    if(!l) return r;
+    if(lockedDays[key]){
+      // نفس السلوك الأصلي بالضبط (مصدر القفل الأول) — السجل المحلي يفضل كما هو
+      return l;
+    }
+    if(isLockedAttRecord(l)){
+      // مقفول عن طريق تعديل مباشر على سجل الحضور نفسه (مصدر القفل الجديد) —
+      // لا يُستبدل إلا بسجل أحدث فعليًا بالتاريخ وكان هو كمان نتيجة تعديل
+      // يدوي حقيقي (يعني قرار لاحق اتخذ من جهاز تاني)، غير ذلك يفضل كما هو
+      if(isLockedAttRecord(r)){
+        const rTs = lockedAttTimestamp(r);
+        const lTs = lockedAttTimestamp(l);
+        if(rTs && lTs && rTs > lTs) return r;
+      }
+      return l;
+    }
+    return r;
   });
 
-  // أي سجل حضور محلي ليوم مقفول ومش موجود خالص في نسخة Firebase المجلوبة
-  // (لسه رفعته ما وصلتش) — بنضيفه بدل ما يضيع
+  // أي سجل حضور محلي مقفول (من أي مصدر قفل) ومش موجود خالص في نسخة
+  // Firebase المجلوبة (لسه رفعته ما وصلتش) — بنضيفه بدل ما يضيع
   const mergedKeys = {};
   merged.forEach(m=>{ if(m) mergedKeys[m.eid+'|'+m.dt] = true; });
   local.forEach(l=>{
-    if(l && lockedDays[l.eid+'|'+l.dt] && !mergedKeys[l.eid+'|'+l.dt]) merged.push(l);
+    if(l && isLocalLocked(l) && !mergedKeys[l.eid+'|'+l.dt]) merged.push(l);
   });
   return merged;
 }
@@ -6138,8 +6167,24 @@ function isLockedIssue(iss){
     && (iss.status==='تمت الموافقة' || iss.status==='تم التعديل' || iss.status==='تم الاعتماد يدويًا' || iss.status==='تم التجاهل'));
 }
 
+// ===== فحص قفل سجل حضور واحد — نفس مبدأ isLockedIssue بالضبط، بس على
+// مستوى سجل الحضور (DB.att) نفسه مباشرة: أي سجل حضور اتعدّل يدويًا من
+// خلال تاب الحضور أو كشف المرتبات أو طلب إجازة (convertedBy/editedBy/
+// addedBy) بيُعتبر "مقفول" ولو مفيش سجل "متابعة إجراءات" مرتبط بيه خالص —
+// ده بالضبط السيناريو اللي كان ناقص قبل كده: تعديل مباشر على يوم مالوش
+// تنبيه أصلاً كان بيفضل من غير أي حماية ضد استبدال Firebase. العلامات دي
+// مُستخدمة بالفعل في أماكن تانية بالنظام كإشارة "تعديل يدوي حقيقي"
+// (راجع مثلًا الفحص المطابق جوه scanAttendanceIssues وجوه savePayrollDayEdit) =====
+function isLockedAttRecord(att){
+  return !!(att && (att.convertedBy || att.editedBy || att.addedBy));
+}
+function lockedAttTimestamp(att){
+  return (att && (att.convertedAt || att.editedAt || att.addedAt)) || null;
+}
+
 function hasAccountantLock(eid, dt){
-  return DB.issues.some(i=> i.eid===eid && i.dt===dt && isLockedIssue(i));
+  if(DB.issues.some(i=> i.eid===eid && i.dt===dt && isLockedIssue(i))) return true;
+  return DB.att.some(a=> a.eid===eid && a.dt===dt && isLockedAttRecord(a));
 }
 
 // ===== فحص شامل لشهر الدورة الحالية — دورة الـ6 أيام + إشعارات + متابعة الإجراءات =====
