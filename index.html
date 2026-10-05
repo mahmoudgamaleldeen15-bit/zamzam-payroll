@@ -837,6 +837,7 @@ body.auth-mode {
     <h1 style="font-size:20px;font-weight:800;color:#5b21b6;margin:0">سجل المستفيدين</h1>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn bg" onclick="go('reports');setTimeout(()=>switchReport('charity'),300)"><span class="ms ms-sm">summarize</span>تقرير سنوي</button>
+      <button class="btn bg" style="background:#eef2ff;color:#0f2057" onclick="printCharityBeneficiaries()"><span class="ms ms-sm">print</span>🖨️ طباعة</button>
       <button class="btn bg" style="background:#e7fdf9;color:#097571" onclick="payCharityBatch()"><span class="ms ms-sm">payments</span>صرف الدفعة</button>
       <button class="btn bp" onclick="openChrMo()"><span class="ms ms-sm">person_add</span>إضافة حالة</button>
     </div>
@@ -4049,6 +4050,80 @@ function editChr(id){
   const c=DB.chr.find(x=>x.id===id);if(!c)return;document.getElementById('cf-id').value=c.id;['nm','ph','ad','am','tp','rc','rl','nt'].forEach(k=>{const el=document.getElementById('cf-'+k);if(el)el.value=c[k]||''});document.getElementById('chr-mo-title').textContent='تعديل بيانات الحالة';document.getElementById('chr-mo').classList.add('open');}
 function delChr(id){if(!confirm('حذف الحالة؟'))return;DB.chr=DB.chr.filter(c=>c.id!==id);sv('chr',DB.chr);renderChr();toast('حُذفت','success')}
 
+// ===== زر طباعة مستقل لسجل مستفيدي وحدة الصدقات — Read-Only تمامًا =====
+// لا يقرأ أو يغيّر أي شيء غير عرض بيانات DB.chr الحالية كما هي على ورق A4؛
+// حالة الاستلام في الورقة المطبوعة دايمًا مربع فاضي ☐ للتعليم اليدوي بالقلم،
+// بدون أي علاقة بحالة الاستلام الفعلية المسجلة في النظام (getCharityStatus) —
+// الطباعة دي مستقلة تمامًا عن منطق/بيانات/تصميم الوحدة الحالي ولا تعدّل فيه شيئًا
+function printCharityBeneficiaries(){
+  const list = DB.chr.slice();
+  const total = list.reduce((s,c)=>s+Number(c.am||0),0);
+  const dateStr = new Date().toLocaleDateString('ar-EG');
+
+  const rowsHtml = list.map((c,i)=>`
+    <tr>
+      <td style="text-align:center;padding:7px 8px;border-bottom:1px solid #e5e7eb;font-size:12px">${i+1}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e7eb;font-size:12.5px;font-weight:700">${c.nm||'—'}</td>
+      <td style="text-align:left;padding:7px 10px;border-bottom:1px solid #e5e7eb;font-size:12.5px;font-weight:700" dir="ltr">${fc(c.am)} ج.م</td>
+      <td style="text-align:center;padding:7px 10px;border-bottom:1px solid #e5e7eb;font-size:16px">&#9744;</td>
+    </tr>`).join('');
+
+  const html = `
+    <div style="text-align:center;margin-bottom:14px">
+      <div style="font-size:16px;font-weight:800;color:#5b21b6">سجل مستفيدي وحدة الصدقات</div>
+      <div style="font-size:11.5px;color:#64748b;margin-top:3px">تاريخ الطباعة: ${dateStr} — إجمالي عدد المستفيدين: ${list.length}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="background:#f0edff">
+          <th style="text-align:center;padding:8px;border-bottom:2px solid #7c3aed;font-size:12px;color:#5b21b6;width:40px">م</th>
+          <th style="text-align:right;padding:8px;border-bottom:2px solid #7c3aed;font-size:12px;color:#5b21b6">اسم المستفيد</th>
+          <th style="text-align:left;padding:8px;border-bottom:2px solid #7c3aed;font-size:12px;color:#5b21b6">قيمة الصدقة</th>
+          <th style="text-align:center;padding:8px;border-bottom:2px solid #7c3aed;font-size:12px;color:#5b21b6;width:95px">حالة الاستلام</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml || `<tr><td colspan="4" style="text-align:center;padding:30px;color:#94a3b8">لا يوجد مستفيدون مسجلون</td></tr>`}
+        <tr>
+          <td colspan="2" style="padding:12px 10px;font-size:13.5px;font-weight:800;color:#5b21b6;border-top:2px solid #7c3aed">إجمالي الصدقات</td>
+          <td style="text-align:left;padding:12px 10px;font-size:14px;font-weight:800;color:#5b21b6;border-top:2px solid #7c3aed" dir="ltr">${fc(total)} ج.م</td>
+          <td style="border-top:2px solid #7c3aed"></td>
+        </tr>
+      </tbody>
+    </table>`;
+
+  document.getElementById('charity-print-style-temp')?.remove();
+  document.getElementById('charity-print-section')?.remove();
+
+  const style = document.createElement('style');
+  style.id = 'charity-print-style-temp';
+  style.textContent = `
+    @media print{
+      body > *:not(#charity-print-section){ display:none !important; }
+      #charity-print-section{
+        display:block !important; position:static !important; visibility:visible !important;
+        width:100%; margin:0; padding:14mm;
+      }
+      #charity-print-section table{ page-break-inside:auto; width:100%; }
+      #charity-print-section tr{ page-break-inside:avoid; }
+      #charity-print-section thead{ display:table-header-group; }
+      @page{ size:A4; margin:10mm; }
+    }
+    @media screen{ #charity-print-section{ display:none; } }
+  `;
+  document.head.appendChild(style);
+
+  const section = document.createElement('div');
+  section.id = 'charity-print-section';
+  section.innerHTML = html;
+  document.body.appendChild(section);
+
+  const cleanup = () => { section.remove(); style.remove(); window.removeEventListener('afterprint', cleanup); };
+  window.addEventListener('afterprint', cleanup);
+
+  window.print();
+}
+
 // ===================== RESPONSIVE + INIT =====================
 const qaBtns=document.querySelectorAll('.qa-btn');qaBtns.forEach(b=>{b.addEventListener('mouseenter',()=>{b.style.background='#f0f4ff';b.style.borderColor='#c7d3f0'});b.addEventListener('mouseleave',()=>{b.style.background='#fff';b.style.borderColor='#dde3f0'})});const fs=document.createElement('style');fs.textContent=`@media(max-width:900px){#f-grid,#dash-2col{grid-template-columns:1fr!important}}@media(max-width:768px){.dr{width:100%!important}}`;document.head.appendChild(fs);// ===== استيراد الموظفين من CSV البصمة =====
 function importEmpsFromCSV(input){
@@ -4069,9 +4144,9 @@ function importAttCSV(input){
   const file=input.files[0];if(!file)return;const ext=file.name.split('.').pop().toLowerCase();const reader=new FileReader();reader.onload=function(e){
     try{
       let records=[];if(ext==='json'){
-        const data=JSON.parse(e.target.result);records=data.map(r=>({id:r.id||uid(),eid:findEmpById(r.empCode)||'',dt:r.date||'',y:Number(r.year)||0,m:Number(r.month)||0,d:Number(r.day)||0,ti:normalizeTime(r.timeIn)||'',to:normalizeTime(r.timeOut)||'',ot:Number(r.ot)||0,ott:r.otType||'عادي (1.5×)',st:r.status||'حضور',nt:r.note||'مستورد من البصمة',isLate:false}));} else {
+        const data=JSON.parse(e.target.result);records=data.map(r=>{const tiV=normalizeTime(r.timeIn)||'';const toV=normalizeTime(r.timeOut)||'';return{id:r.id||uid(),eid:findEmpById(r.empCode)||'',dt:r.date||'',y:Number(r.year)||0,m:Number(r.month)||0,d:Number(r.day)||0,ti:tiV,to:toV,ot:Number(r.ot)||0,ott:r.otType||'عادي (1.5×)',st:r.status||(tiV?'حضور':(toV?'غياب':'حضور')),nt:r.note||(!tiV&&toV?'مستورد من البصمة — يوجد تسجيل انصراف بدون تسجيل حضور':'مستورد من البصمة'),isLate:false};});} else {
         const lines=e.target.result.split('\n').filter(l=>l.trim());const headers=lines[0].split(',').map(h=>h.trim().replace(/^\uFEFF/,''));for(let i=1;i<lines.length;i++){
-          const vals=lines[i].split(',');const row={};headers.forEach((h,j)=>row[h]=(vals[j]||'').trim());if(!row['التاريخ'])continue;const [yr,mn,dy]=(row['التاريخ']||'').split('-');const empId=findEmpById(row['رقم الموظف'])||findEmpByNm(row['اسم الموظف'])||'';records.push({id:uid(),eid:empId,dt:row['التاريخ']||'',y:Number(yr)||0,m:Number(mn)||0,d:Number(dy)||0,ti:row['وقت الدخول']||'',to:row['وقت الخروج']||'',ot:0,ott:'hour_normal',st:row['الحالة']||'حضور',nt:'مستورد من البصمة',isLate:false});}
+          const vals=lines[i].split(',');const row={};headers.forEach((h,j)=>row[h]=(vals[j]||'').trim());if(!row['التاريخ'])continue;const [yr,mn,dy]=(row['التاريخ']||'').split('-');const empId=findEmpById(row['رقم الموظف'])||findEmpByNm(row['اسم الموظف'])||'';const tiV2=row['وقت الدخول']||'';const toV2=row['وقت الخروج']||'';records.push({id:uid(),eid:empId,dt:row['التاريخ']||'',y:Number(yr)||0,m:Number(mn)||0,d:Number(dy)||0,ti:tiV2,to:toV2,ot:0,ott:'hour_normal',st:row['الحالة']||(tiV2?'حضور':(toV2?'غياب':'حضور')),nt:(!tiV2&&toV2)?'مستورد من البصمة — يوجد تسجيل انصراف بدون تسجيل حضور':'مستورد من البصمة',isLate:false});}
       }
       let added=0,skipped=0;records.forEach(r=>{
         if(!r.eid){skipped++;return;}
@@ -5828,15 +5903,17 @@ async function startFetch(){
         } else skippedAtt++;
         return;
       }
-      // سجل جديد
+      // سجل جديد — الحالة الافتراضية (لو مفيش status جاي من السيرفر) بتعتمد
+      // على وجود وقت الدخول فعليًا: سجل فيه وقت انصراف بس من غير وقت دخول
+      // ما يُفترضش "حضور" تلقائيًا، ده لازم يتسجل غيابًا ويترجع للمحاسب
       DB.att.push({
         id:r.id||uid(),eid,
         dt:r.date,y:r.year,m:r.month,d:r.day,
         ti:r.timeIn,to:r.timeOut,
         ot:calcOt?Number(r.ot||0):0,
         ott:'hour_normal',
-        st:r.status||'حضور',
-        nt:r.note||'',isLate:false,
+        st:r.status||(r.timeIn?'حضور':(r.timeOut?'غياب':'حضور')),
+        nt:r.note||((!r.timeIn&&r.timeOut)?'يوجد تسجيل انصراف بدون تسجيل حضور':''),isLate:false,
       });addedAtt++;});sv('att',DB.att);setProgress(100,'✅ اكتمل!');// عرض النتيجة
     const MONTHS_AR2=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];document.getElementById('fetch-result').style.display='block';document.getElementById('fetch-result-details').innerHTML=`
       <div>📅 الشهر:<strong>${MONTHS_AR2[month-1]} ${year}</strong></div>
@@ -5955,6 +6032,21 @@ function computeRestCycle(days, restDayNum){
   return results;
 }
 
+// ===== قرار المحاسب المعتمد = Source of Truth الأساسي بعد اعتماده =====
+// أي سجل في DB.issues اتخذ فيه قرار فعلي من مستخدم حقيقي (مش "نظام") ووصل
+// لحالة نهائية (تمت الموافقة / تم التعديل / تم الاعتماد يدويًا / تم التجاهل)
+// بيُعتبر "مقفول" نهائيًا — أي منطق إعادة حساب أو فحص تلقائي (scanAttendanceIssues
+// وما يتبعها) ما ينفعش يلمس اليوم ده تاني أبدًا (لا يضيف سجل حضور جديد، ولا
+// يعيد توليد إجراء، ولا يرجّعه لأي حالة سابقة) — التعديل الوحيد المسموح بيه
+// هو تعديل يدوي صريح من المحاسب نفسه من خلال شاشات النظام (editPastDecision/
+// resolveCheckoutOnlyIssue/convertAttStatus...)، وده مش بيعدي من هنا خالص
+function hasAccountantLock(eid, dt){
+  return DB.issues.some(i=>
+    i.eid===eid && i.dt===dt && i.decidedBy && i.decidedBy!=='نظام'
+    && (i.status==='تمت الموافقة' || i.status==='تم التعديل' || i.status==='تم الاعتماد يدويًا' || i.status==='تم التجاهل')
+  );
+}
+
 // ===== فحص شامل لشهر الدورة الحالية — دورة الـ6 أيام + إشعارات + متابعة الإجراءات =====
 // آمن للتكرار: لا يعيد إنشاء أي سجل موجود بالفعل، ولا يعدّل قرارًا يدويًا سابقًا
 // ===== ترحيل سجلات الإشعارات القديمة (من نسخة سابقة قبل توحيد الحالات بالعربي) =====
@@ -6047,8 +6139,64 @@ function scanAttendanceIssues(){
 
     const results = computeRestCycle(days, restDayNum);
 
+    // ===== حالتا "انصراف بدون حضور" و"حضور بدون انصراف" — فحص مباشر على
+    // سجل الحضور الفعلي لكل يوم، مستقل عن دورة الراحة تمامًا؛ ما يتلمسش
+    // أي يوم اتخذ المحاسب فيه قرار معتمد فعلاً (hasAccountantLock) =====
+    days.forEach(day=>{
+      const dt = day.dt;
+      if(hasAccountantLock(e.id, dt)) return;
+      const att = DB.att.find(a=>a.eid===e.id && a.dt===dt);
+      if(!att) return;
+
+      if(att.ti && !att.to){
+        // حضور بدون انصراف — الموظف حاضر بشكل طبيعي، وده إجراء مراجعة
+        // توضيحي فقط، ما يغيّرش حضوره خالص (نفس نوع "نقص انصراف" الموجود
+        // بالفعل في النظام — بنفس الـ id وبنفس الرسالة، فقط بنضمن إنه
+        // بيتفحص فعليًا لكل سجل حضور حقيقي بدل ما يعتمد على مسار دورة
+        // الراحة اللي ما كانش بيوصل لهذا الفرع عمليًا)
+        const coId = 'co_'+e.id+'_'+dt;
+        if(!DB.issues.find(i=>i.id===coId)){
+          DB.issues.push({
+            id:coId, eid:e.id, dt, type:'نقص انصراف',
+            systemFinding:'الموظف سجل حضورًا في '+dt+' ولم يسجل انصرافًا',
+            suggestedAction:'review_checkout', executedAction:null, finalAction:null,
+            status:'بانتظار المراجعة', history:[],
+            createdAt:new Date().toISOString(), createdBy:'نظام',
+            decidedBy:null, decidedAt:null
+          });
+          issuesChanged = true;
+        }
+      } else if(att.to && !att.ti){
+        // انصراف بدون حضور — النظام لا يفترض حضورًا غير موجود؛ يُسجَّل
+        // غيابًا مع توضيح السبب، وتظهر الحالة لمتابعة الإجراءات ليقرر
+        // المحاسب القرار المناسب. لا نلمس أي سجل سبق للمحاسب أن عدّله
+        // يدويًا (editedBy/convertedBy) — ده بيبقى قراره الثابت
+        if(att.st!=='غياب' && !att.editedBy && !att.convertedBy){
+          att.st = 'غياب';
+          if(!att.nt || !String(att.nt).includes('انصراف بدون')) att.nt = 'يوجد تسجيل انصراف بدون تسجيل حضور';
+          att.checkoutOnlyPending = true;
+          attChanged = true;
+        }
+        const ckId = 'cko_'+e.id+'_'+dt;
+        if(!DB.issues.find(i=>i.id===ckId)){
+          DB.issues.push({
+            id:ckId, eid:e.id, dt, type:'checkout_no_checkin',
+            systemFinding:'يوجد تسجيل انصراف بدون تسجيل حضور — تم تسجيل اليوم غيابًا حتى يحدد المحاسب القرار المناسب',
+            suggestedAction:'permitted', executedAction:null, finalAction:null,
+            status:'بانتظار المراجعة', history:[],
+            createdAt:new Date().toISOString(), createdBy:'نظام',
+            decidedBy:null, decidedAt:null
+          });
+          issuesChanged = true;
+        }
+      }
+    });
+
     results.forEach(r=>{
       const dt = r.dt;
+      // قرار محاسب معتمد لهذا اليوم بالفعل — ثابت ولا يجوز لإعادة الحساب
+      // التلقائية دي إن تضيف أو تعدّل أي سجل حضور أو إجراء خاص بيه
+      if(hasAccountantLock(e.id, dt)) return;
 
       // === تنظيف أي إشعار "يحتاج مراجعة" قديم لو بقى عنده سجل دلوقتي ===
       if(r.decision!=='needs_review'){
@@ -6300,7 +6448,8 @@ function showNotifications(){
     'no_attendance': {icon:'warning', color:'#e03131', title:'تنبيه غياب يحتاج إجراء'},
     'بدل راحة':      {icon:'swap_horiz', color:'#0369a1', title:'تسجيل بدل راحة تلقائي — يحتاج مراجعة'},
     'نقص انصراف':    {icon:'schedule', color:'#d97706', title:'نقص تسجيل انصراف'},
-    'راحة أسبوعية':  {icon:'beach_access', color:'#7c3aed', title:'تسجيل راحة أسبوعية تلقائي — يحتاج مراجعة'}
+    'راحة أسبوعية':  {icon:'beach_access', color:'#7c3aed', title:'تسجيل راحة أسبوعية تلقائي — يحتاج مراجعة'},
+    'checkout_no_checkin': {icon:'logout', color:'#e03131', title:'انصراف بدون حضور — يحتاج قرار'}
   };
 
   const issuesHtml = pending.map(iss=>{
@@ -6308,6 +6457,10 @@ function showNotifications(){
     const empName = emp ? emp.nm : 'موظف محذوف';
     const dateArabic = formatArabicDate(iss.dt);
     const meta = typeMeta[iss.type] || typeMeta['no_attendance'];
+    // "انصراف بدون حضور" له آلية تنفيذ مختلفة (يوجد سجل att فعلي بالفعل
+    // بحالة "غياب" مؤقتة، فلازم نحوّله بـ convertAttStatus بدل إضافة سجل
+    // جديد يتعارض معاه) — resolveAttIssue مخصوصة لحالة "لا يوجد سجل خالص"
+    const resolveFn = iss.type==='checkout_no_checkin' ? 'resolveCheckoutOnlyIssue' : 'resolveAttIssue';
 
     let actionsHtml = '';
     if(canAct){
@@ -6316,12 +6469,12 @@ function showNotifications(){
       // مش بس يوافق عليه أو يسيبه زي ما هو
       actionsHtml =
         "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:10px'>"
-        + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest_swap')\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
-        + "<button onclick=\"resolveAttIssue('"+iss.id+"','rest')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>راحة أسبوعية</button>"
-        + "<button onclick=\"resolveAttIssue('"+iss.id+"','permitted')\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
-        + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized')\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
-        + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
-        + "<button onclick=\"resolveAttIssue('"+iss.id+"','present')\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>حضور</button>"
+        + "<button onclick=\""+resolveFn+"('"+iss.id+"','rest_swap')\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
+        + "<button onclick=\""+resolveFn+"('"+iss.id+"','rest')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>راحة أسبوعية</button>"
+        + "<button onclick=\""+resolveFn+"('"+iss.id+"','permitted')\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
+        + "<button onclick=\""+resolveFn+"('"+iss.id+"','unauthorized')\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
+        + "<button onclick=\""+resolveFn+"('"+iss.id+"','leave')\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+        + "<button onclick=\""+resolveFn+"('"+iss.id+"','present')\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>حضور</button>"
         + "<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' style='background:#f0f4fc;color:#94a3b8'>موافقة على المقترح</button>"
         + "</div>";
     } else {
@@ -6341,7 +6494,7 @@ function showNotifications(){
       +     "</div>"
       +     actionsHtml
       +   "</div>"
-      +   (canAct && iss.type==='no_attendance' ? ("<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' title='إخفاء (تم)' style='background:#f0f4fc;color:#94a3b8;flex-shrink:0'>تم</button>") : "")
+      +   (canAct && (iss.type==='no_attendance'||iss.type==='checkout_no_checkin') ? ("<button onclick=\"dismissAttIssue('"+iss.id+"')\" class='btn bg bs' title='إخفاء (تم)' style='background:#f0f4fc;color:#94a3b8;flex-shrink:0'>تم</button>") : "")
       + "</div>"
       + "</div>"
     );
@@ -6529,6 +6682,40 @@ function resolveAttIssue(issueId, actionType){
   refreshAfterIssueAction();
 }
 
+// ===== معالجة إجراء "انصراف بدون حضور" — خلاف باقي حالات "لا يوجد سجل"
+// (no_attendance)، هنا يوجد بالفعل سجل att (بحالة "غياب" مؤقتة وضعها
+// النظام تلقائيًا) بدل ما نضيف سجل جديد يتعارض معاه، بنستخدم نفس آلية
+// التحويل الموحّدة (convertAttStatus) اللي بالفعل بتحدّث سجل متابعة
+// الإجراءات المرتبط تلقائيًا (resolveRelatedIssue) وبتدي القرار أولوية ثابتة =====
+function resolveCheckoutOnlyIssue(issueId, actionType){
+  const session = getSession();
+  if(!session || !(session.role==='admin' || session.perms?.att_edit)){
+    toast('ليس لديك صلاحية اتخاذ إجراء','error'); return;
+  }
+  const iss = DB.issues.find(i=>i.id===issueId);
+  if(!iss || iss.status!=='بانتظار المراجعة'){ toast('تم التعامل مع هذا التنبيه بالفعل','info'); return; }
+
+  const emp = DB.emp.find(e=>e.id===iss.eid);
+  if(!emp){ toast('الموظف غير موجود','error'); return; }
+
+  const attRec = DB.att.find(a=>a.eid===iss.eid && a.dt===iss.dt);
+  if(!attRec){ toast('سجل الحضور غير موجود','error'); return; }
+
+  const statusMap = {
+    rest_swap:'يوم بدل راحة', permitted:'غياب بإذن', unauthorized:'غياب بدون إذن',
+    leave:'إجازة اعتيادية', present:'حضور', rest:'راحة أسبوعية'
+  };
+  const newStatus = statusMap[actionType];
+  if(!newStatus){ toast('إجراء غير معروف','error'); return; }
+
+  const ok = convertAttStatus(attRec.id, newStatus);
+  if(ok===false) return; // convertAttStatus بنفسه بيعرض رسالة الخطأ (مثلاً رصيد إجازات غير كافٍ)
+
+  logActivity('معالجة انصراف بدون حضور', emp.nm+' — '+iss.dt+' — '+newStatus);
+  toast('✅ تم تسجيل الإجراء بنجاح','success');
+  refreshAfterIssueAction();
+}
+
 // ===== موافقة/إخفاء تنبيه بدون تغيير الإجراء (زر تم / موافقة) =====
 function dismissAttIssue(issueId){
   const session = getSession();
@@ -6539,7 +6726,7 @@ function dismissAttIssue(issueId){
   if(!iss || iss.status!=='بانتظار المراجعة') return;
 
   iss.history = iss.history || [];
-  if(iss.type==='no_attendance'){
+  if(iss.type==='no_attendance' || iss.type==='checkout_no_checkin'){
     // إخفاء بدون اختيار إجراء محدد
     iss.status = 'تم الاعتماد يدويًا';
   } else {
@@ -7786,7 +7973,7 @@ function renderActionTracking(){
       const e = DB.emp.find(x=>x.id===iss.eid);
       const sc = statusColor[iss.status]||'#94a3b8';
       const sb = statusBg[iss.status]||'#f0f4fc';
-      const typeLabel = iss.type==='no_attendance' ? 'غياب يحتاج مراجعة' : iss.type;
+      const typeLabel = iss.type==='no_attendance' ? 'غياب يحتاج مراجعة' : iss.type==='checkout_no_checkin' ? 'انصراف بدون حضور' : iss.type;
       return '<tr>'
         + '<td style="font-weight:700">'+(e?.nm||'موظف محذوف')+'</td>'
         + '<td style="font-size:11px;color:#94a3b8">'+(e?.cd||'—')+'</td>'
@@ -7810,7 +7997,7 @@ function renderActionTracking(){
         const e = DB.emp.find(x=>x.id===iss.eid);
         const sc = statusColor[iss.status]||'#94a3b8';
         const sb = statusBg[iss.status]||'#f0f4fc';
-        const typeLabel = iss.type==='no_attendance' ? 'غياب يحتاج مراجعة' : iss.type;
+        const typeLabel = iss.type==='no_attendance' ? 'غياب يحتاج مراجعة' : iss.type==='checkout_no_checkin' ? 'انصراف بدون حضور' : iss.type;
         return '<div onclick="viewTrackingDetail(\''+iss.id+'\')" style="background:#fff;border-radius:12px;padding:14px;border:1px solid #eaeffa;cursor:pointer">'
           + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">'
           +   '<div><div style="font-weight:800;font-size:13px;color:#0f2057">'+(e?.nm||'موظف محذوف')+'</div>'
@@ -7850,7 +8037,7 @@ function viewTrackingDetail(id){
     ['الموظف', e?.nm||'موظف محذوف'],
     ['الكود', e?.cd||'—'],
     ['التاريخ المرتبط', iss.dt],
-    ['نوع الإجراء', iss.type==='no_attendance'?'غياب يحتاج مراجعة':iss.type],
+    ['نوع الإجراء', iss.type==='no_attendance'?'غياب يحتاج مراجعة':iss.type==='checkout_no_checkin'?'انصراف بدون حضور':iss.type],
     ['ما اكتشفه النظام', iss.systemFinding||'—'],
     ['اقتراح النظام', trackingActionLabel(iss.suggestedAction||iss.executedAction)],
     ['قرار المحاسب', trackingActionLabel(iss.finalAction)],
@@ -7873,6 +8060,18 @@ function viewTrackingDetail(id){
         + "<button onclick=\"resolveAttIssue('"+iss.id+"','unauthorized');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
         + "<button onclick=\"resolveAttIssue('"+iss.id+"','leave');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
         + "<button onclick=\"resolveAttIssue('"+iss.id+"','present');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>حضور</button>"
+        + "<button onclick=\"dismissAttIssue('"+iss.id+"');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0f4fc;color:#94a3b8'>تم بدون إجراء</button>"
+        + "</div>";
+    } else if(iss.type==='checkout_no_checkin'){
+      // يوجد سجل att فعلي بالفعل (غياب مؤقت) — التنفيذ عبر resolveCheckoutOnlyIssue
+      // (يستخدم convertAttStatus بدل إضافة سجل حضور جديد يتعارض مع الموجود)
+      actionsHtml =
+        "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px'>"
+        + "<button onclick=\"resolveCheckoutOnlyIssue('"+iss.id+"','rest_swap');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#e0f2fe;color:#0369a1'>بدل راحة</button>"
+        + "<button onclick=\"resolveCheckoutOnlyIssue('"+iss.id+"','permitted');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#fef3c7;color:#d97706'>غياب بإذن</button>"
+        + "<button onclick=\"resolveCheckoutOnlyIssue('"+iss.id+"','unauthorized');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#ffe5e5;color:#e03131'>غياب بدون إذن</button>"
+        + "<button onclick=\"resolveCheckoutOnlyIssue('"+iss.id+"','leave');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0edff;color:#7c3aed'>إجازة اعتيادية</button>"
+        + "<button onclick=\"resolveCheckoutOnlyIssue('"+iss.id+"','present');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#dcfce7;color:#16a34a'>حضور</button>"
         + "<button onclick=\"dismissAttIssue('"+iss.id+"');document.getElementById('track-detail-mo')?.remove()\" class='btn bg bs' style='background:#f0f4fc;color:#94a3b8'>تم بدون إجراء</button>"
         + "</div>";
     } else {
