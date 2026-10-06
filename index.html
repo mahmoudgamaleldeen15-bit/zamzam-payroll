@@ -3736,8 +3736,6 @@ function openAttEdit(attId){
 function saveAttEdit(attId, btnEl){
   const session = getSession();
   if(!session || session.role !== 'admin'){ toast('صلاحية مرفوضة','error'); return; }
-  const idx = DB.att.findIndex(a=>a.id===attId);
-  if(idx<0) return;
 
   // 🔒 منع الضغط المتكرر على زر "حفظ" أثناء تنفيذ العملية — تعطيل بصري
   // وقائي للزر نفسه فقط (لو حصل ضغط تاني وهو شغال، بنتجاهله)، من غير أي
@@ -3750,66 +3748,82 @@ function saveAttEdit(attId, btnEl){
     btnEl.style.cursor = 'not-allowed';
   }
 
-  // نحفظ الفلتر الحالي (الموظف المختار) قبل أي تحديث، ونضمن رجوعه بعد الحفظ
-  const preservedEf = document.getElementById('at-ef')?.value || '';
-
-  const ti = document.getElementById('att-ed-ti')?.value || '';
-  const to = document.getElementById('att-ed-to')?.value || '';
-  const newSt = document.getElementById('att-ed-st')?.value || DB.att[idx].st;
-  const nt = document.getElementById('att-ed-nt')?.value || '';
-  const oldSt = DB.att[idx].st;
-
-  // حساب الساعات
-  let hours = DB.att[idx].hours;
-  let ot = DB.att[idx].ot || 0;
-  if(ti && to){
-    const [h1,m1]=ti.split(':').map(Number);
-    const [h2,m2]=to.split(':').map(Number);
-    const mins=(h2*60+m2)-(h1*60+m1);
-    if(mins > 0){
-      // ساعات الحضور الفعلية (زي ما هي بالظبط) — من وقت الحضور الحقيقي
-      // المسجّل، مبيتأثرش بميعاد الموظف المحدد في كارته خالص
-      hours = (mins/60).toFixed(1);
-      // أوفرتايم (أكثر من 8 ساعات) — بحد أدنى لبداية الحساب هو ميعاد
-      // حضور الموظف المسجّل في كارته (emp.workTime)، لو الحضور الفعلي
-      // كان قبله. لو مفيش ميعاد محدد أو غير صالح، الحساب يفضل زي ما هو
-      // بالظبط بدون أي تغيير (Add-only على نقطة بداية حساب الأوفرتايم بس)
-      const emp = DB.emp.find(e=>e.id===DB.att[idx].eid);
-      const schedMins = emp ? timeToMins(emp.workTime) : null;
-      const actualStartMins = h1*60+m1;
-      const otStartMins = (schedMins !== null && actualStartMins < schedMins) ? schedMins : actualStartMins;
-      const otWorkHrs = ((h2*60+m2) - otStartMins) / 60;
-      const stdHrs = Number(DB.rules?.['work_hrs']||8);
-      ot = otWorkHrs > stdHrs ? Number((otWorkHrs-stdHrs).toFixed(1)) : 0;
+  // 🔒 ضمان إضافي: مهما حصل جوه عملية الحفظ (حتى لو خطأ غير متوقع، أو
+  // السجل اختفى من DB.att لأي سبب — زي مزامنة لحظية وصلت في نفس توقيت
+  // الحفظ)، المودال لازم يتقفل دايمًا والمستخدم ياخد رد فعل واضح، بدل ما
+  // يفضل "معلّق" من غير أي استجابة. نفس منطق الحفظ القديم بالظبط لسه زي
+  // ما هو جوه الـtry، من غير أي تغيير — الإضافة هنا هي الحماية حواليه بس
+  try{
+    const idx = DB.att.findIndex(a=>a.id===attId);
+    if(idx<0){
+      // السجل مش موجود — إما اتحذف أو اختفى مؤقتًا بسبب مزامنة وصلت في
+      // نفس اللحظة. بدل ما نسيب المودال معلّق من غير رد فعل، بنقفله
+      // ونوضّح للمستخدم إنه يحتاج يفتح التعديل تاني (بدل الصمت التام)
+      document.getElementById('att-edit-mo')?.remove();
+      toast('السجل لم يعد موجودًا، من فضلك أعد فتح التعديل وحاول تاني','error');
+      return;
     }
-  }
 
-  // 1) نطبّق تعديل الوقت والملاحظة (من غير حفظ لسه) — وبعدين الحالة كمان
-  //    لو اتغيّرت، الاتنين في تحديث واحد بس بيتبعت لفايربيز مرة واحدة.
-  //    ده مهم جدًا: لو بعتنا الحفظ مرتين متتاليتين (مرة بالحالة القديمة
-  //    ومرة بالجديدة) ممكن السباق بين الاتنين يخلي فايربيز يحتفظ بالحالة
-  //    القديمة غلط لو وصلت هي التانية — فبقى تحديث واحد نهائي بس، بيمثّل
-  //    قرار المحاسب الفعلي، ومفيش أي نسخة وسطية بتتبعت خالص
-  DB.att[idx] = {
-    ...DB.att[idx],
-    ti: ti||DB.att[idx].ti,
-    to: to||DB.att[idx].to,
-    nt, hours, ot,
-    editedBy: session.name,
-    editedAt: new Date().toISOString()
-  };
+    // نحفظ الفلتر الحالي (الموظف المختار) قبل أي تحديث، ونضمن رجوعه بعد الحفظ
+    const preservedEf = document.getElementById('at-ef')?.value || '';
 
-  // 2) لو الحالة اتغيّرت — لازم يمر على نفس منطق التحويل الموحّد
-  //    (convertAttStatus) اللي بيعالج رصيد الإجازات تلقائيًا وبيحفظ هو
-  //    نفسه — نفس الدالة المستخدمة في تعديل كشف المرتبات، عشان مايبقاش
-  //    فيه منطقين مختلفين لنفس العملية
-  if(newSt !== oldSt){
-    convertAttStatus(attId, newSt);
-  } else {
-    sv('att', DB.att);
-    resolveRelatedIssue(DB.att[idx].eid, DB.att[idx].dt, newSt);
-    logActivity('تعديل سجل حضور', `${DB.emp.find(e=>e.id===DB.att[idx].eid)?.nm} — ${DB.att[idx].dt}`);
-  }
+    const ti = document.getElementById('att-ed-ti')?.value || '';
+    const to = document.getElementById('att-ed-to')?.value || '';
+    const newSt = document.getElementById('att-ed-st')?.value || DB.att[idx].st;
+    const nt = document.getElementById('att-ed-nt')?.value || '';
+    const oldSt = DB.att[idx].st;
+
+    // حساب الساعات
+    let hours = DB.att[idx].hours;
+    let ot = DB.att[idx].ot || 0;
+    if(ti && to){
+      const [h1,m1]=ti.split(':').map(Number);
+      const [h2,m2]=to.split(':').map(Number);
+      const mins=(h2*60+m2)-(h1*60+m1);
+      if(mins > 0){
+        // ساعات الحضور الفعلية (زي ما هي بالظبط) — من وقت الحضور الحقيقي
+        // المسجّل، مبيتأثرش بميعاد الموظف المحدد في كارته خالص
+        hours = (mins/60).toFixed(1);
+        // أوفرتايم (أكثر من 8 ساعات) — بحد أدنى لبداية الحساب هو ميعاد
+        // حضور الموظف المسجّل في كارته (emp.workTime)، لو الحضور الفعلي
+        // كان قبله. لو مفيش ميعاد محدد أو غير صالح، الحساب يفضل زي ما هو
+        // بالظبط بدون أي تغيير (Add-only على نقطة بداية حساب الأوفرتايم بس)
+        const emp = DB.emp.find(e=>e.id===DB.att[idx].eid);
+        const schedMins = emp ? timeToMins(emp.workTime) : null;
+        const actualStartMins = h1*60+m1;
+        const otStartMins = (schedMins !== null && actualStartMins < schedMins) ? schedMins : actualStartMins;
+        const otWorkHrs = ((h2*60+m2) - otStartMins) / 60;
+        const stdHrs = Number(DB.rules?.['work_hrs']||8);
+        ot = otWorkHrs > stdHrs ? Number((otWorkHrs-stdHrs).toFixed(1)) : 0;
+      }
+    }
+
+    // 1) نطبّق تعديل الوقت والملاحظة (من غير حفظ لسه) — وبعدين الحالة كمان
+    //    لو اتغيّرت، الاتنين في تحديث واحد بس بيتبعت لفايربيز مرة واحدة.
+    //    ده مهم جدًا: لو بعتنا الحفظ مرتين متتاليتين (مرة بالحالة القديمة
+    //    ومرة بالجديدة) ممكن السباق بين الاتنين يخلي فايربيز يحتفظ بالحالة
+    //    القديمة غلط لو وصلت هي التانية — فبقى تحديث واحد نهائي بس، بيمثّل
+    //    قرار المحاسب الفعلي، ومفيش أي نسخة وسطية بتتبعت خالص
+    DB.att[idx] = {
+      ...DB.att[idx],
+      ti: ti||DB.att[idx].ti,
+      to: to||DB.att[idx].to,
+      nt, hours, ot,
+      editedBy: session.name,
+      editedAt: new Date().toISOString()
+    };
+
+    // 2) لو الحالة اتغيّرت — لازم يمر على نفس منطق التحويل الموحّد
+    //    (convertAttStatus) اللي بيعالج رصيد الإجازات تلقائيًا وبيحفظ هو
+    //    نفسه — نفس الدالة المستخدمة في تعديل كشف المرتبات، عشان مايبقاش
+    //    فيه منطقين مختلفين لنفس العملية
+    if(newSt !== oldSt){
+      convertAttStatus(attId, newSt);
+    } else {
+      sv('att', DB.att);
+      resolveRelatedIssue(DB.att[idx].eid, DB.att[idx].dt, newSt);
+      logActivity('تعديل سجل حضور', `${DB.emp.find(e=>e.id===DB.att[idx].eid)?.nm} — ${DB.att[idx].dt}`);
+    }
 
   // ✅ الحفظ الفعلي خلص هنا بالكامل (نفس منطق الحفظ القديم، بدون أي
   // تغيير) — بنأكّد للمستخدم فورًا بدل ما ننتظر عمليات إعادة الفحص
@@ -3837,6 +3851,14 @@ function saveAttEdit(attId, btnEl){
     if(efEl2 && efEl2.value !== preservedEf){ efEl2.value = preservedEf; renderAtt(); }
   }catch(e){
     console.error('saveAttEdit: خطأ غير حرج في تحديث العرض بعد نجاح الحفظ (البيانات المحفوظة لم تتأثر)', e);
+  }
+  }catch(e){
+    // 🔒 أي خطأ غير متوقع حصل جوه منطق الحفظ نفسه (قبل ما نوصل لنقطة
+    // التأكيد فوق) — برضه نقفل المودال ونوضّح للمستخدم بدل ما يفضل معلّق
+    // من غير أي رد فعل خالص. ده شبكة أمان بس، منطق الحفظ نفسه لم يتغير
+    console.error('saveAttEdit: خطأ غير متوقع أثناء الحفظ', e);
+    document.getElementById('att-edit-mo')?.remove();
+    toast('⚠️ حصل خطأ غير متوقع أثناء الحفظ، من فضلك تأكد من البيانات وحاول تاني','error');
   }
 }
 
