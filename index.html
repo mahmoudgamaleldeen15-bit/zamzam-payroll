@@ -2735,7 +2735,12 @@ function resolveRelatedIssue(eid, dt, newStatus){
   const relatedIssue = DB.issues.find(i=>i.eid===eid && i.dt===dt);
   if(relatedIssue){
     const newAction = statusToAction[newStatus] || newStatus;
-    relatedIssue.history = relatedIssue.history || [];
+    // 🔒 حماية من سجلات قديمة (Legacy) ممكن يكون history فيها مش Array
+    // أصلًا (نص أو قيمة تانية) — ده كان بيسبب خطأ Runtime حقيقي
+    // (history.push is not a function) يوقف الحفظ بالكامل لو صادف يوم
+    // عليه سجل متابعة إجراءات بصيغة قديمة زي دي؛ هنا بس بنضمن إنه Array
+    // دايمًا قبل الإضافة له، من غير أي تغيير في باقي المنطق
+    relatedIssue.history = Array.isArray(relatedIssue.history) ? relatedIssue.history : (relatedIssue.history ? [relatedIssue.history] : []);
     relatedIssue.history.push({from:relatedIssue.finalAction, to:newAction, by:getSession()?.name||'نظام', at:new Date().toISOString()});
     relatedIssue.finalAction = newAction;
     relatedIssue.status = 'تم التعديل';
@@ -2754,7 +2759,7 @@ function dismissActionTrackingIssue(issueId){
   if(!iss) return;
   if(iss.status !== 'بانتظار المراجعة'){ toast('التنبيه ده اتعالج بالفعل','info'); return; }
   if(!confirm('تجاهل هذا التنبيه؟ لن يظهر كـ"بانتظار المراجعة" بعد الآن.')) return;
-  iss.history = iss.history || [];
+  iss.history = Array.isArray(iss.history) ? iss.history : (iss.history ? [iss.history] : []);
   iss.history.push({from:iss.finalAction, to:'تجاهل', by:session.name||'نظام', at:new Date().toISOString()});
   iss.status = 'تم التجاهل';
   iss.decidedBy = session.name||'نظام';
@@ -3858,7 +3863,7 @@ function saveAttEdit(attId, btnEl){
     // من غير أي رد فعل خالص. ده شبكة أمان بس، منطق الحفظ نفسه لم يتغير
     console.error('saveAttEdit: خطأ غير متوقع أثناء الحفظ', e);
     document.getElementById('att-edit-mo')?.remove();
-    toast('⚠️ حصل خطأ غير متوقع أثناء الحفظ، من فضلك تأكد من البيانات وحاول تاني','error');
+    toast('⚠️ خطأ أثناء الحفظ: '+(e?.message||e),'error');
   }
 }
 
@@ -4039,10 +4044,10 @@ function applyGlobalIncrease(){
   const pct=Number(document.getElementById('global-pct').value);if(isNaN(pct)||pct<0){toast('أدخل نسبة صحيحة','error');return}
   if(!DB.rent.filter(r=>r.status==='نشط').length){toast('لا توجد عقود نشطة','warning');return}
   let cnt=0;DB.rent.forEach(r=>{
-    if(r.status!=='نشط')return;const oldVal=Number(r.curr||r.base);const newVal=pct>0?oldVal*(1+pct/100):oldVal;if(!r.history)r.history=[];r.history.push({y:DB.cycle.y,m:DB.cycle.m,val:newVal,pct,note:`زيادة تلقائية ${pct}%`});r.curr=Math.round(newVal);r.pct=pct;cnt++;});sv('rent',DB.rent);renderRent();renderDash();toast(pct>0?`تم تطبيق زيادة ${pct}% على ${cnt} عقد`:`تم تثبيت ${cnt} عقد بدون زيادة`,'success');}
+    if(r.status!=='نشط')return;const oldVal=Number(r.curr||r.base);const newVal=pct>0?oldVal*(1+pct/100):oldVal;if(!Array.isArray(r.history))r.history=r.history?[r.history]:[];r.history.push({y:DB.cycle.y,m:DB.cycle.m,val:newVal,pct,note:`زيادة تلقائية ${pct}%`});r.curr=Math.round(newVal);r.pct=pct;cnt++;});sv('rent',DB.rent);renderRent();renderDash();toast(pct>0?`تم تطبيق زيادة ${pct}% على ${cnt} عقد`:`تم تثبيت ${cnt} عقد بدون زيادة`,'success');}
 
 function updateSingleRent(id,newVal,pct,manual){
-  const r=DB.rent.find(x=>x.id===id);if(!r)return;const oldVal=Number(r.curr||r.base);if(!r.history)r.history=[];r.history.push({y:DB.cycle.y,m:DB.cycle.m,val:newVal,pct,note:manual?'تعديل يدوي':`زيادة ${pct}%`});r.curr=Math.round(newVal);r.pct=pct;sv('rent',DB.rent);renderRent();toast('تم التحديث','success');}
+  const r=DB.rent.find(x=>x.id===id);if(!r)return;const oldVal=Number(r.curr||r.base);if(!Array.isArray(r.history))r.history=r.history?[r.history]:[];r.history.push({y:DB.cycle.y,m:DB.cycle.m,val:newVal,pct,note:manual?'تعديل يدوي':`زيادة ${pct}%`});r.curr=Math.round(newVal);r.pct=pct;sv('rent',DB.rent);renderRent();toast('تم التحديث','success');}
 
 function archiveCurrentMonth(){
   const snapshot=DB.rent.filter(r=>r.status==='نشط').map(r=>({...r}));if(!snapshot.length){toast('لا توجد عقود للأرشفة','warning');return}
@@ -5329,7 +5334,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
+    <div class="company">🏬 شركة حلوانى الغربية</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -6263,7 +6268,16 @@ function migrateLegacyIssueRecords(){
       if(!iss.systemFinding){ iss.systemFinding='لم يتم تسجيل حضور أو انصراف، وليس يوم راحة مستحق'; changed=true; }
       if(!iss.suggestedAction){ iss.suggestedAction='permitted'; changed=true; }
     }
-    if(!iss.history){ iss.history=[]; changed=true; }
+    // 🔒 سجلات قديمة ممكن يكون history فيها اتسجّل بصيغة مش Array أصلًا
+    // (مش بس ناقص/undefined) — ده كان بيسبب خطأ Runtime حقيقي (history.push
+    // is not a function) يوقف عملية الحفظ بالكامل أول ما حد يحاول يعدّل
+    // إجراء مرتبط بسجل زي ده. هنا بنصلّحها تلقائيًا لصيغة Array سليمة
+    // (ترحيل بيانات فقط — تاريخ التعديلات القديم لو كان موجود كنص بيتحفظ
+    // كعنصر وحيد جوه الـArray، مش بيُفقد)
+    if(!Array.isArray(iss.history)){
+      iss.history = iss.history ? [iss.history] : [];
+      changed=true;
+    }
   });
   if(changed) sv('issues', DB.issues);
   return changed;
@@ -6768,7 +6782,7 @@ function editPastDecision(issueId, actionType){
   }
 
   // تحديث سجل المتابعة مع الاحتفاظ بتاريخ التعديلات كاملاً
-  iss.history = iss.history || [];
+  iss.history = Array.isArray(iss.history) ? iss.history : (iss.history ? [iss.history] : []);
   iss.history.push({from:iss.finalAction, to:actionType, by:session.name, at:new Date().toISOString()});
   iss.finalAction = actionType;
   iss.status = 'تم التعديل';
@@ -6855,7 +6869,7 @@ function resolveAttIssue(issueId, actionType){
 
   // تحديث سجل متابعة الإجراءات — نحتفظ بالاقتراح الأصلي ونسجل قرار المحاسب
   const wasModified = iss.suggestedAction && iss.suggestedAction!==actionType;
-  iss.history = iss.history || [];
+  iss.history = Array.isArray(iss.history) ? iss.history : (iss.history ? [iss.history] : []);
   iss.history.push({from:iss.finalAction||iss.suggestedAction||null, to:actionType, by:session.name, at:new Date().toISOString()});
   iss.finalAction = actionType;
   iss.status = wasModified ? 'تم التعديل' : 'تمت الموافقة';
@@ -6912,7 +6926,7 @@ function dismissAttIssue(issueId){
   const iss = DB.issues.find(i=>i.id===issueId);
   if(!iss || iss.status!=='بانتظار المراجعة') return;
 
-  iss.history = iss.history || [];
+  iss.history = Array.isArray(iss.history) ? iss.history : (iss.history ? [iss.history] : []);
   if(iss.type==='no_attendance' || iss.type==='checkout_no_checkin'){
     // إخفاء بدون اختيار إجراء محدد
     iss.status = 'تم الاعتماد يدويًا';
