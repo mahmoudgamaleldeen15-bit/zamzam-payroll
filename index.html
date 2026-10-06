@@ -3724,7 +3724,7 @@ function openAttEdit(attId){
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
         <button class="btn bg" onclick="document.getElementById('att-edit-mo').remove()">إلغاء</button>
-        <button class="btn bn" onclick="saveAttEdit('${attId}')">
+        <button class="btn bn" id="att-ed-save-btn" onclick="saveAttEdit('${attId}', this)">
           <span class="ms ms-sm">save</span>حفظ
         </button>
       </div>
@@ -3733,11 +3733,23 @@ function openAttEdit(attId){
   document.body.appendChild(mo);
 }
 
-function saveAttEdit(attId){
+function saveAttEdit(attId, btnEl){
   const session = getSession();
   if(!session || session.role !== 'admin'){ toast('صلاحية مرفوضة','error'); return; }
   const idx = DB.att.findIndex(a=>a.id===attId);
   if(idx<0) return;
+
+  // 🔒 منع الضغط المتكرر على زر "حفظ" أثناء تنفيذ العملية — تعطيل بصري
+  // وقائي للزر نفسه فقط (لو حصل ضغط تاني وهو شغال، بنتجاهله)، من غير أي
+  // مساس بمنطق الحفظ أو البيانات نفسها
+  if(btnEl){
+    if(btnEl.dataset.saving === '1') return;
+    btnEl.dataset.saving = '1';
+    btnEl.disabled = true;
+    btnEl.style.opacity = '0.6';
+    btnEl.style.cursor = 'not-allowed';
+  }
+
   // نحفظ الفلتر الحالي (الموظف المختار) قبل أي تحديث، ونضمن رجوعه بعد الحفظ
   const preservedEf = document.getElementById('at-ef')?.value || '';
 
@@ -3799,20 +3811,33 @@ function saveAttEdit(attId){
     logActivity('تعديل سجل حضور', `${DB.emp.find(e=>e.id===DB.att[idx].eid)?.nm} — ${DB.att[idx].dt}`);
   }
 
-  // نعيد فحص دورة الراحة فورًا — لو التعديل ده خلّى يوم تاني (بعده) يستحق
-  // راحة/بدل راحة، يتحدد وينضاف كتنبيه للمراجعة على طول
-  if(typeof scanAttendanceIssues==='function') scanAttendanceIssues();
-
+  // ✅ الحفظ الفعلي خلص هنا بالكامل (نفس منطق الحفظ القديم، بدون أي
+  // تغيير) — بنأكّد للمستخدم فورًا بدل ما ننتظر عمليات إعادة الفحص
+  // والعرض التانية تحت دي (اللي ممكن تاخد وقت ملحوظ، أو حتى تفشل لأي
+  // سبب)، عشان نافذة التأكيد تظهر فورًا وبشكل مضمون بمجرد نجاح الحفظ
+  // الفعلي، وما تفضلش معلّقة في انتظار حاجة مش ضرورية لظهورها
   document.getElementById('att-edit-mo')?.remove();
   toast('✅ تم حفظ التعديل','success');
-  renderAtt();
-  if(typeof renderLeave==='function') renderLeave();
-  if(typeof renderDash==='function') renderDash();
-  if(typeof renderPay==='function') renderPay();
 
-  // نضمن إن فلتر الموظف يفضل زي ما كان — بغض النظر عن أي حاجة تانية غيّرته
-  const efEl2 = document.getElementById('at-ef');
-  if(efEl2 && efEl2.value !== preservedEf){ efEl2.value = preservedEf; renderAtt(); }
+  // العمليات التانية دي (إعادة فحص دورة الراحة + تحديث العروض) مش حرجة
+  // لظهور التأكيد خالص — بنغلّفها عشان لو حصل فيها أي خطأ غير متوقع،
+  // التأكيد اللي ظهر بالفعل فوق ده يفضل زي ما هو، والحفظ نفسه (اللي خلص
+  // قبل كده) ميتأثرش
+  try{
+    // نعيد فحص دورة الراحة فورًا — لو التعديل ده خلّى يوم تاني (بعده) يستحق
+    // راحة/بدل راحة، يتحدد وينضاف كتنبيه للمراجعة على طول
+    if(typeof scanAttendanceIssues==='function') scanAttendanceIssues();
+    renderAtt();
+    if(typeof renderLeave==='function') renderLeave();
+    if(typeof renderDash==='function') renderDash();
+    if(typeof renderPay==='function') renderPay();
+
+    // نضمن إن فلتر الموظف يفضل زي ما كان — بغض النظر عن أي حاجة تانية غيّرته
+    const efEl2 = document.getElementById('at-ef');
+    if(efEl2 && efEl2.value !== preservedEf){ efEl2.value = preservedEf; renderAtt(); }
+  }catch(e){
+    console.error('saveAttEdit: خطأ غير حرج في تحديث العرض بعد نجاح الحفظ (البيانات المحفوظة لم تتأثر)', e);
+  }
 }
 
 function formatTime12(t){
@@ -8290,6 +8315,19 @@ function renderActionTracking(){
 
   let list = DB.issues.slice();
 
+  // 🔒 استثناء الموظفين المعفيين من نظام الحضور (attExempt) أو من خصم
+  // التأخير (lateExempt) من الظهور في متابعة الإجراءات نهائيًا — حتى لو
+  // كان عنده سجل "قديم" اتولّد قبل تفعيل الاستثناء من كارت الموظف (مفيش
+  // تنظيف تلقائي رجعي للسجلات القديمة، فده فلتر عرض بس، مش حذف أو تعديل
+  // لأي سجل فعلي في DB.issues ولا DB.att — السجل يفضل موجود في قاعدة
+  // البيانات، بس مش بيظهر هنا طالما الموظف لسه مستثنى). هذا الفلتر لا
+  // يمسّ قرار المحاسب ولا آلية حفظه أو عرضه خالص — فقط شرط تصفية إضافي
+  // قبل بناء القائمة المعروضة
+  list = list.filter(i=>{
+    const emp = DB.emp.find(e=>e.id===i.eid);
+    return !(emp && (emp.attExempt || emp.lateExempt));
+  });
+
   // نطاق الدورة الافتراضي — طالما المحاسب مفيش حدد فلتر تاريخ يدوي بنفسه
   // (من/إلى تاريخ)، القائمة بتتحصر تلقائيًا على شهر الدورة الحالي المختار
   // (DB.cycle)؛ ده كان ناقص خالص قبل كده — التاب كان بيعرض كل إجراءات كل
@@ -9579,7 +9617,7 @@ function pureSHA256(msg){
     }
   }
   msg+='';
-  while(msg.length%64-56){msg+=' ';}
+  while(msg.length%64-56){msg+='\u0000';}
   for(i=0;i<msg.length;i++){
     j=msg.charCodeAt(i);
     if(j>>8){return '';}
