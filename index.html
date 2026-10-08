@@ -2461,14 +2461,52 @@ async function initFirebaseOnLogin(){
 }
 
 
+// ===== تنبيه امتلاء مساحة التخزين المحلي في المتصفح (localStorage) —
+// بيظهر لما localStorage.setItem يرمي خطأ "QuotaExceededError" بسبب حجم
+// بيانات كبير (زي جدول الحضور بعد سنين من الاستخدام)؛ مُقيَّد بحد أقصى
+// مرة كل دقيقة عشان ميضايقش المستخدم بتكرار نفس التنبيه مع كل حفظة =====
+let _lastQuotaWarnTs = 0;
+function notifyLocalStorageQuotaExceeded(){
+  const now = Date.now();
+  if(now - _lastQuotaWarnTs < 60000) return;
+  _lastQuotaWarnTs = now;
+  const syncedToServer = (typeof fbOnline !== 'undefined' && fbOnline && typeof fbSyncEnabled !== 'undefined' && fbSyncEnabled);
+  toast(syncedToServer
+    ? '⚠️ مساحة التخزين المؤقت في متصفحك ممتلئة — التعديل اتحفظ على الخادم بنجاح، بس النسخة المؤقتة في هذا الجهاز لم تتحدّث. يُفضّل تفريغ بيانات الموقع من إعدادات المتصفح.'
+    : '⚠️ مساحة التخزين المؤقت في متصفحك ممتلئة ولا يوجد اتصال بالخادم الآن — يُفضّل تفريغ بيانات الموقع من إعدادات المتصفح أو التأكد من الاتصال بالإنترنت ثم إعادة المحاولة.',
+    'warning');
+}
+
 // sv الأصلية — حفظ محلي بسيط + سجل تدقيق (مُستخدمة داخليًا فقط)
 function _svOriginal(k,d){
-  localStorage.setItem('zz_'+k,JSON.stringify(d));
-  // سجل بسيط لآخر تعديل
-  const log=JSON.parse(localStorage.getItem('zz_audit_log')||'[]');
-  log.push({k,ts:new Date().toISOString(),cnt:Array.isArray(d)?d.length:1});
-  if(log.length>100) log.splice(0,log.length-100);
-  localStorage.setItem('zz_audit_log',JSON.stringify(log));
+  const json = JSON.stringify(d);
+  try{
+    localStorage.setItem('zz_'+k,json);
+  }catch(e){
+    // 🔒 لو مساحة التخزين المحلي (localStorage) في المتصفح امتلأت، كان
+    // الخطأ ده بيقطع الحفظ بالكامل — بما فيه رفع فايربيز نفسه، لأن sv()
+    // كانت بتوقف تمامًا عند أول خطأ هنا من غير ما توصل لكود رفع فايربيز
+    // أصلاً. هنا بس بنمنع توقف الحفظ: بنحاول نفضي مساحة بسيطة (سجل
+    // التدقيق zz_audit_log مش جزء من بيانات النظام الفعلية) ونعيد المحاولة
+    // مرة واحدة، وفي كل الأحوال منسيبش الخطأ يوقف باقي العملية (زي رفع
+    // فايربيز) — من غير أي تغيير في باقي منطق الحفظ نفسه
+    console.error('_svOriginal: فشل الحفظ المحلي (localStorage)، على الأغلب بسبب امتلاء المساحة', e);
+    try{
+      localStorage.removeItem('zz_audit_log');
+      localStorage.setItem('zz_'+k,json);
+    }catch(e2){
+      console.error('_svOriginal: فشلت إعادة المحاولة كمان — هيتم الاعتماد على فايربيز فقط لحفظ هذا التعديل لو متصل', e2);
+      notifyLocalStorageQuotaExceeded();
+      return;
+    }
+  }
+  // سجل بسيط لآخر تعديل — غير حرج، أي خطأ فيه ميوقفش الحفظ الأساسي
+  try{
+    const log=JSON.parse(localStorage.getItem('zz_audit_log')||'[]');
+    log.push({k,ts:new Date().toISOString(),cnt:Array.isArray(d)?d.length:1});
+    if(log.length>100) log.splice(0,log.length-100);
+    localStorage.setItem('zz_audit_log',JSON.stringify(log));
+  }catch(e){ /* سجل التدقيق غير حرج */ }
 }
 
 // sv الموحّدة — الدالة الوحيدة المستخدمة في كل البرنامج:
@@ -5334,7 +5372,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏬 شركة حلوانى الغربية</div>
+    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
