@@ -5372,7 +5372,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
+    <div class="company">🏬 شركة حلوانى الغربية</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -9883,6 +9883,23 @@ function clearSession(){
   sessionStorage.removeItem(AUTH_KEYS.SESSION);
 }
 
+// ===== كتابة آمنة في localStorage — لو مساحة التخزين ممتلئة، بترجع false
+// بدل ما ترمي استثناء يوقف الكود اللي بعدها (زي ما كان بيحصل مع تسجيل
+// الدخول: logActivity بعد نجاح كلمة المرور كانت بترمي خطأ امتلاء المساحة
+// فيوقف الدالة قبل ما توصل لـ enterApp، فيفضل المستخدم في صفحة الدخول من
+// غير أي رسالة توضح السبب) — بتستخدم نفس تنبيه امتلاء المساحة الموجود
+// فعلاً (notifyLocalStorageQuotaExceeded) =====
+function _safeLocalSet(key, value){
+  try{
+    localStorage.setItem(key, value);
+    return true;
+  }catch(e){
+    console.error('_safeLocalSet: فشل الحفظ المحلي لمفتاح "'+key+'"، على الأغلب بسبب امتلاء مساحة التخزين', e);
+    if(typeof notifyLocalStorageQuotaExceeded === 'function') notifyLocalStorageQuotaExceeded();
+    return false;
+  }
+}
+
 // تسجيل النشاط
 function logActivity(action, detail=''){
   const log = JSON.parse(localStorage.getItem(AUTH_KEYS.ACTIVITY)||'[]');
@@ -9896,7 +9913,7 @@ function logActivity(action, detail=''){
     at: new Date().toISOString(),
   });
   if(log.length > 500) log.splice(400);
-  localStorage.setItem(AUTH_KEYS.ACTIVITY, JSON.stringify(log));
+  _safeLocalSet(AUTH_KEYS.ACTIVITY, JSON.stringify(log));
 }
 
 // ===== Splash + Login Flow =====
@@ -9960,7 +9977,12 @@ async function doAdminLogin(){
   if(fbOnline){
     const fbHash = await fbPullAuth(FB_ADMIN_PATH);
     if(fbHash && typeof fbHash === 'string'){
-      localStorage.setItem(AUTH_KEYS.ADMIN_PASS, fbHash);
+      // 🔒 ده مجرد تحديث لنسخة محلية مؤقتة (كاش) من الهاش القادم من
+      // فايربيز — لو فشل بسبب امتلاء مساحة التخزين، لازم نكمل عادي
+      // ونتحقق من كلمة المرور بالهاش اللي عندنا أصلاً، بدل ما نوقف الدخول
+      // بالكامل قبل حتى ما نوصل لمقارنة كلمة المرور نفسها (ده كان السبب
+      // الحقيقي وراء "بكتب الباسورد ومش بيدخل خالص" لما المساحة بتكون ممتلئة)
+      _safeLocalSet(AUTH_KEYS.ADMIN_PASS, fbHash);
     }
   }
 
