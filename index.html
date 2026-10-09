@@ -5372,7 +5372,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏬 شركة حلوانى الغربية</div>
+    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -5769,14 +5769,18 @@ function renderRestDays(){
     let taken=0, workedOnRest=0, altRest=0;restDates.forEach(d=>{
       const rec=attRecs.find(a=>a.d===d);
       if(rec){
-        // فيه سجل صريح
-        if(rec.st==='راحة أسبوعية'||rec.st==='غياب'||rec.st==='إجازة رسمية'||rec.st==='إجازة اعتيادية') taken++;
+        // فيه سجل صريح — 🔒 لازم نتعرف على نفس الحالات اللي فعليًا بتتسجل
+        // من تاب الحضور والأوفرتايم دلوقتي ("غياب بإذن"/"غياب بدون إذن"
+        // بدل الاسم القديم "غياب" وحده، وكمان "يوم بدل راحة")، وإلا القرار
+        // المعتمد (زي "بدل راحة") كان بيتجاهل هنا تمامًا ويظهر العداد
+        // وكأن الموظف "لم يأخذ" راحته رغم وجود قرار معتمد صريح بخلاف كده
+        if(rec.st==='راحة أسبوعية'||rec.st==='غياب'||rec.st==='غياب بإذن'||rec.st==='يوم بدل راحة'||rec.st==='إجازة رسمية'||rec.st==='إجازة اعتيادية') taken++;
         else if(rec.st==='حضور') workedOnRest++;
       }
       // لو مفيش سجل → مش نعدها لا راحة ولا حضور
     });// راحة بديلة:أيام غياب في غير يوم الراحة
     const nonRestAbsent=attRecs.filter(a=>{
-      const dt=new Date(year,month-1,a.d);return dt.getDay()!==restDayNum&&(a.st==='غياب'||a.st==='إجازة اعتيادية');}).length;altRest=Math.min(workedOnRest,nonRestAbsent);const notTaken=Math.max(0,entitled-taken-altRest);const workedColor=workedOnRest>0?'#e03131':'#94a3b8';return`<tr>
+      const dt=new Date(year,month-1,a.d);return dt.getDay()!==restDayNum&&(a.st==='غياب'||a.st==='غياب بإذن'||a.st==='إجازة اعتيادية');}).length;altRest=Math.min(workedOnRest,nonRestAbsent);const notTaken=Math.max(0,entitled-taken-altRest);const workedColor=workedOnRest>0?'#e03131':'#94a3b8';return`<tr>
       <td style="font-weight:700">${e.nm}<br/><span style="font-size:10.5px;color:#94a3b8">${e.cd||''}</span></td>
       <td style="text-align:center"><span class="bd" style="background:#eef2ff;color:#0f2057">${DAYS_AR[restDayNum]}</span></td>
       <td style="text-align:center;font-weight:800;color:#0f2057">${entitled}</td>
@@ -5792,7 +5796,20 @@ function renderRestDays(){
 function viewRestDetail(eid, month, year){
   const e=DB.emp.find(x=>x.id===eid);if(!e)return;const restDayNum=Number(e.restDay);const daysInMonth=new Date(year,month,0).getDate();const attRecs=DB.att.filter(a=>a.eid===eid&&a.y===year&&a.m===month);let msg=`تفاصيل راحات ${e.nm} — ${MAR3[month-1]} ${year}\nيوم الراحة:${DAYS_AR[restDayNum]}\n\n`;for(let d=1;d<=daysInMonth;d++){
     const dt=new Date(year,month-1,d);if(dt.getDay()===restDayNum){
-      const rec=attRecs.find(a=>a.d===d);const status=!rec?'⬜ بدون سجل':rec.st==='راحة أسبوعية'?'✅ راحة':rec.st==='غياب'?'✅ أخذها':rec.st==='حضور'?'🔴 اشتغل فيها':rec.st==='إجازة اعتيادية'?'✅ إجازة':'⬜ '+rec.st;msg+=`يوم ${d} ${MAR3[month-1]}:${status}\n`;}
+      const rec=attRecs.find(a=>a.d===d);
+      // 🔒 توحيد نفس تسميات القرار المعتمد زي ما هي في تاب الحضور
+      // والأوفرتايم بالظبط (خصوصًا "بدل راحة"/"غياب بإذن"/"غياب بدون
+      // إذن")، بدل ما تظهر هنا برمز محايد "⬜" وكأنها حالة غير معروفة
+      const status=!rec?'⬜ بدون سجل'
+        :rec.st==='راحة أسبوعية'?'✅ راحة'
+        :rec.st==='يوم بدل راحة'?'✅ بدل راحة'
+        :rec.st==='غياب بإذن'?'✅ أخذها (غياب بإذن)'
+        :rec.st==='غياب بدون إذن'?'❌ غياب بدون إذن'
+        :rec.st==='غياب'?'✅ أخذها'
+        :rec.st==='حضور'?'🔴 اشتغل فيها'
+        :rec.st==='إجازة اعتيادية'?'✅ إجازة'
+        :'⬜ '+rec.st;
+      msg+=`يوم ${d} ${MAR3[month-1]}:${status}\n`;}
   }
   alert(msg);}
 
@@ -9249,7 +9266,13 @@ function renderDailyAttReport(){
 
     if(leaveRec){
       status='إجازة اعتيادية'; statusBg='#f0edff'; statusColor='#7c3aed';
-    } else if(isRestDay && (!att||att.st!=='حضور')){
+    } else if(isRestDay && (!att||!att.st)){
+      // 🔒 الحالة الافتراضية ("يوم راحة") بتتطبق بس لما مفيش سجل حضور
+      // أصلًا، أو السجل موجود بس بدون حالة محدّدة لسه — أما لو فيه قرار
+      // صريح محفوظ (زي "بدل راحة" أو "غياب بإذن" أو "غياب بدون إذن")، فده
+      // لازم يفضل هو الظاهر هنا بالظبط زي ما هو في تاب الحضور، من غير ما
+      // الحالة الافتراضية تستبدله — ده كان السبب الحقيقي وراء ظهور حالة
+      // مختلفة عن القرار المعتمد في هذا التقرير تحديدًا
       status='يوم راحة'; statusBg='#e0f2fe'; statusColor='#0369a1';
     } else if(isRestDay && att?.st==='حضور'){
       status='عمل في راحته'; statusBg='#fef3c7'; statusColor='#d97706';
