@@ -4937,34 +4937,76 @@ function renderReceipts(){
 // مختلف فقط للعِلم — من غير ما يتحط عليه علامة حضور تلقائية أبدًا.
 // نفس الدالة بتستخدم في وضع طباعة موظف واحد وفي وضع طباعة كل الموظفين
 // معًا (الاتنين بينادوا buildReceiptCard لكل موظف)
-function buildAttendanceCheckGrid(emp){
+// ===== جدول إثبات الحضور اليومي الموحَّد (تصميم جديد حسب الصورة المرفقة
+// من المستخدم) — عمود مستقل بعرض الكارت بالكامل تقريبًا، صف لكل يوم فعلي
+// في الشهر (28/29/30/31 حسب الشهر والسنة فعليًا، نفس منطق daysInMonth
+// القديم بدون أي تغيير)، وكل صف فيه 3 خانات فاضية للتعبئة اليدوية: رقم
+// اليوم (+ خانة تحديد صغيرة)، بيان الحضور، والمسحوبات/السلف اليومية. دي
+// نفس فكرة إثبات الحضور القديمة + جدول "المسحوبات الشهرية" القديم، لكن
+// مدموجين في جدول واحد مرتب بالأيام زي الصورة بالظبط — من غير أي بيانات
+// أو قيم محسوبة جديدة، كله نقاط فاضية للمحاسب =====
+function buildDailyAttendanceLedger(emp, daysInMonth, targetBodyHeightPx=740){
   const y = DB.cycle.y, m = DB.cycle.m;
-  const daysInMonth = new Date(y, m, 0).getDate();
   const restDayNum = (emp.restDay!==undefined && emp.restDay!==null && String(emp.restDay).trim()!=='')
     ? Number(emp.restDay) : -1;
 
-  let cells = '';
+  // ===== ارتفاع كل صف بيتحسب ديناميكيًا عشان الجدول كله (مهما كان عدد
+  // أيام الشهر من 28 لـ31) يملأ نفس المساحة الرأسية المتاحة تقريبًا، لحد
+  // أسفل الورقة — بدل ما يفضل مرتفع ثابت صغير صعب الكتابة فيه، بناءً على
+  // طلب صريح من المستخدم بتوسيع صفوف اليوم لسهولة الكتابة لاحقًا =====
+  const rowH = Math.max(22, Math.floor(targetBodyHeightPx / daysInMonth));
+
+  let rows = '';
   for(let d=1; d<=daysInMonth; d++){
     const dow = new Date(y, m-1, d).getDay();
+    // ===== يوم الراحة الأسبوعي المسجَّل في كارت الموظف نفسه (emp.restDay)
+    // بيتحدد تلقائيًا ويتظلل (خلفية رمادية فاتحة) داخل عمود اليوم بس —
+    // بناءً على طلب صريح من المستخدم للتمييز البصري، بدون أي تأثير على
+    // منطق تحديد يوم الراحة نفسه أو أي حساب أو قاعدة تانية في النظام =====
     const isRest = restDayNum>=0 && dow===restDayNum;
-    cells += `
-      <div style="text-align:center;border:1px solid ${isRest?'#93c5fd':'#e2eaf6'};border-radius:5px;padding:3px 1px;background:${isRest?'#dbeafe':'#fff'}">
-        <div style="font-size:8.5px;font-weight:700;color:${isRest?'#1d4ed8':'#4a5982'}">${d}</div>
-        <div style="font-size:12px;line-height:1;color:#94a3b8;margin-top:1px">☐</div>
-      </div>`;
+    rows += `
+      <tr>
+        <td style="text-align:center;font-size:9.5px;font-weight:800;color:#000;border:1px solid #000;${isRest?'background:#d9d9d9;':''}padding:2px;white-space:nowrap;height:${rowH}px">${d} <span style="font-size:9px">☐</span></td>
+        <td style="border:1px solid #000;height:${rowH}px"></td>
+        <td style="border:1px solid #000"></td>
+      </tr>`;
   }
 
   return `
-    <div style="margin-top:14px;padding-top:10px;border-top:1px dashed #e2eaf6">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px">
-        <span style="font-size:11px;font-weight:800;color:#0f2057">إثبات الحضور اليومي (${daysInMonth} يوم)</span>
-        <span style="display:flex;align-items:center;gap:12px">
-          <span style="display:flex;align-items:center;gap:4px;font-size:9px;color:#4a5982"><span style="width:9px;height:9px;border-radius:2px;background:#fff;border:1px solid #cbd5e1;display:inline-block"></span>يوم عمل</span>
-          <span style="display:flex;align-items:center;gap:4px;font-size:9px;color:#4a5982"><span style="width:9px;height:9px;border-radius:2px;background:#dbeafe;border:1px solid #93c5fd;display:inline-block"></span>يوم الراحة الأسبوعي</span>
-        </span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(24px,1fr));gap:3px">
-        ${cells}
+    <div>
+      <div style="font-size:11px;font-weight:800;color:#000;margin-bottom:4px">إثبات الحضور اليومي (${daysInMonth} يوم)</div>
+      <table style="width:100%;border-collapse:collapse;border-color:#000;color:#000;table-layout:fixed">
+        <thead><tr>
+          <th style="font-size:8px;font-weight:700;color:#000;border:1px solid #000;padding:3px 1px;text-align:center;width:14%">اليوم</th>
+          <th style="font-size:8px;font-weight:700;color:#000;border:1px solid #000;padding:3px 1px;text-align:center;width:34%">بيان الحضور</th>
+          <th style="font-size:8px;font-weight:700;color:#000;border:1px solid #000;padding:3px 1px;text-align:center;width:52%">المسحوبات / السلف</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+// ===== تبسيط أقسام: ساعات إضافية / يوم عمل إضافي / غياب بإذن / غياب
+// بدون إذن — بناءً على طلب صريح من المستخدم بالاكتفاء بخانة "عدد"
+// (ساعات أو أيام) وخانة "قيمة" بس، بدل شبكة مربعات الأيام الكاملة اللي
+// كانت قبل كده (التتبع اليومي التفصيلي بقى متغطّى فعليًا من جدول "إثبات
+// الحضور اليومي" الموحَّد نفسه). نفس فكرة blankBlock/blankLine بالظبط —
+// نقاط فاضية للتعبئة اليدوية، من غير أي بيانات أو قيمة محسوبة =====
+function buildSimpleCountBox(title, qtyLabel){
+  // ===== نص التسمية (عدد الساعات/الأيام، القيمة) بقى محاذي لليمين داخل
+  // المربع (مش في النص/Center) — النص بس هو اللي اتحرك، المربع نفسه زي ما
+  // هو، مع مساحة فاضية أسفل التسمية للكتابة اليدوية — بناءً على طلب صريح
+  // من المستخدم =====
+  return `
+    <div style="margin-top:5px;padding-top:4px;border-top:1px dashed #000">
+      <div style="font-size:11px;font-weight:800;color:#000;margin-bottom:3px">${title}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div style="border:1px solid #000;border-radius:4px;padding:5px 8px 12px 8px;text-align:right">
+          <div style="font-size:9px;color:#000">${qtyLabel}</div>
+        </div>
+        <div style="border:1px solid #000;border-radius:4px;padding:5px 8px 12px 8px;text-align:right">
+          <div style="font-size:9px;color:#000">القيمة</div>
+        </div>
       </div>
     </div>`;
 }
@@ -4979,174 +5021,173 @@ function buildReceiptCard(emp, cycleLabel, isSingleSelected, pageNum){
   const allowArr = emp.allowances||[];
   const ini = (emp.nm||'?').trim().split(' ').map(w=>w[0]).slice(0,2).join('');
   const hasIns = emp.ins==='مؤمَّن عليه' && slip.insEmp > 0;
-  const advs = DB.adv.filter(a=>a.eid===emp.id&&a.status==='نشط');
-  const hasAdv = advs.length > 0;
+  // لازم لمربعات الأيام الديناميكية (ساعات إضافية / يوم عمل إضافي / غياب
+  // بإذن / غياب بدون إذن) — نفس طريقة حساب daysInMonth المستخدمة أصلًا في
+  // buildAttendanceCheckGrid، بدون أي تغيير في مصدر الشهر/السنة (DB.cycle)
+  const daysInMonth = new Date(DB.cycle.y, DB.cycle.m, 0).getDate();
 
+  // ===== إعادة التصميم البصري (أبيض/أسود للطباعة فقط) — row/blankBlock/
+  // blankLine بترجع بالظبط نفس البيانات والبنية، فرق فقط إن كل الألوان
+  // بقت أسود على خلفية بيضاء بدل الدرجات الملونة القديمة. الـ3 دوال دي
+  // لسه بتتنادى بنفس الطريقة القديمة بالظبط من غير أي تغيير في القيم أو
+  // الترتيب =====
+  // ===== تكبير وتنظيم بسيط لبنود الاستحقاقات/الاستقطاعات — مساحة رأسية
+  // أوسع شوية لكل بند عشان توزيع أفضل على طول الصفحة ومساحة كتابة يدوية
+  // أريح، من غير أي تغيير في القيم أو البنود نفسها =====
   const row = (label,val,color='#0f2057')=>`
-    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f4fc">
-      <span style="font-size:11.5px;color:#4a5982">${label}</span>
-      <span style="font-size:12px;font-weight:700;color:${color}">${fc(val)} ج.م</span>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #000">
+      <span style="font-size:13px;color:#000">${label}</span>
+      <span style="font-size:13.5px;font-weight:700;color:#000">${fc(val)} ج.م</span>
     </div>`;
 
   // ===== بلوك فاضي للتعبئة اليدوية — عنوان + جدول (تاريخ | بيان | عمود القيمة) بصفوف فاضية =====
   const blankBlock = (title, qtyLabel, rows=2)=>`
-    <div style="padding:6px 0;border-bottom:1px dashed #e2eaf6">
-      <div style="font-size:11.5px;font-weight:700;color:#0d1b3e;margin-bottom:3px">${title}</div>
-      <table style="width:100%;border-collapse:collapse">
+    <div style="padding:4px 0;border-bottom:1px dashed #000">
+      <div style="font-size:11px;font-weight:700;color:#000;margin-bottom:2px">${title}</div>
+      <table style="width:100%;border-collapse:collapse;border-color:#000;color:#000">
         <thead><tr>
-          <th style="font-size:9px;color:#94a3b8;text-align:right;font-weight:600;padding:2px 0;border-bottom:1px solid #eef1f8">التاريخ</th>
-          <th style="font-size:9px;color:#94a3b8;text-align:right;font-weight:600;padding:2px 4px;border-bottom:1px solid #eef1f8">البيان</th>
-          <th style="font-size:9px;color:#94a3b8;text-align:left;font-weight:600;padding:2px 0;border-bottom:1px solid #eef1f8">${qtyLabel}</th>
+          <th style="font-size:8.5px;color:#000;text-align:right;font-weight:600;padding:1px 0;border-bottom:1px solid #000">التاريخ</th>
+          <th style="font-size:8.5px;color:#000;text-align:right;font-weight:600;padding:1px 4px;border-bottom:1px solid #000">البيان</th>
+          <th style="font-size:8.5px;color:#000;text-align:left;font-weight:600;padding:1px 0;border-bottom:1px solid #000">${qtyLabel}</th>
         </tr></thead>
         <tbody>
           ${Array.from({length:rows}).map(()=>`<tr>
-            <td style="height:16px;border-bottom:1px dotted #e2eaf6"></td>
-            <td style="border-bottom:1px dotted #e2eaf6"></td>
-            <td style="border-bottom:1px dotted #e2eaf6"></td>
+            <td style="height:15px;border-bottom:1px dotted #000"></td>
+            <td style="border-bottom:1px dotted #000"></td>
+            <td style="border-bottom:1px dotted #000"></td>
           </tr>`).join('')}
         </tbody>
       </table>
     </div>`;
 
   const blankLine = (label)=>`
-    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #e2eaf6">
-      <span style="font-size:12px;color:#4a5982">${label}</span>
-      <span style="font-size:12px;color:#cbd5e1">.............. ج.م</span>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #000">
+      <span style="font-size:11.5px;color:#000">${label}</span>
+      <span style="font-size:11.5px;color:#000">.............. ج.م</span>
     </div>`;
 
   // ===== الاستحقاقات =====
-  let entitlementsHtml = row('الراتب الأساسي', slip.basic, '#0f2057');
-  entitlementsHtml += allowArr.map(a=>row(a.name||'بدل', Number(a.val||0), a.inCalc!==false?'#0ea5a0':'#d97706')).join('');
+  let entitlementsHtml = row('الراتب الأساسي', slip.basic);
+  entitlementsHtml += allowArr.map(a=>row(a.name||'بدل', Number(a.val||0))).join('');
   // ===== إجمالي الراتب = الأساسي + كل البدلات (الداخلة في الحساب والخارجة
   // منه) — سطر محسوب يُعرض فقط، من غير أي تغيير في باقي بنود الإيصال =====
   const totalSalary = slip.basic + allowArr.reduce((s,a)=>s+Number(a.val||0),0);
   entitlementsHtml += `
-    <div style="display:flex;justify-content:space-between;padding:7px 0;margin-top:2px;border-top:1.5px dashed #cbd5e1">
-      <span style="font-size:11.5px;font-weight:800;color:#0f2057">إجمالي الراتب</span>
-      <span style="font-size:12px;font-weight:800;color:#0f2057">${fc(totalSalary)} ج.م</span>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;margin-top:1px;border-top:1.5px dashed #000">
+      <span style="font-size:13px;font-weight:800;color:#000">إجمالي الراتب</span>
+      <span style="font-size:14px;font-weight:800;color:#000">${fc(totalSalary)} ج.م</span>
     </div>`;
-  entitlementsHtml += blankBlock('ساعات إضافية', 'عدد الساعات');
-  entitlementsHtml += blankBlock('يوم عمل إضافي', 'عدد الأيام');
+  // ===== ساعات إضافية / يوم عمل إضافي — مربع عدد + مربع قيمة بس (بدل شبكة
+  // أيام كاملة)، بناءً على طلب صريح من المستخدم بالتبسيط =====
+  entitlementsHtml += buildSimpleCountBox('ساعات إضافية', 'عدد الساعات');
+  entitlementsHtml += buildSimpleCountBox('يوم عمل إضافي', 'عدد الأيام');
 
   // ===== الاستقطاعات =====
   let deductionsHtml = '';
-  if(hasIns) deductionsHtml += row('التأمينات الاجتماعية', slip.insEmp, '#e03131');
-  deductionsHtml += blankBlock('غياب بإذن', 'عدد الأيام');
-  deductionsHtml += blankBlock('غياب بدون إذن', 'عدد الأيام');
+  // ===== بند "التأمينات" بقى ظاهر دايمًا (مش بس لو عنده تأمين) — بالقيمة
+  // الفعلية المسجَّلة في كارت الموظف (slip.insEmp، من غير أي تغيير في طريقة
+  // حسابها) لو هو مؤمَّن عليه فعلًا، وإلا تفضل خانة القيمة فاضية تمامًا —
+  // بناءً على طلب صريح من المستخدم =====
+  deductionsHtml += hasIns ? row('التأمينات', slip.insEmp) : blankLine('التأمينات');
+  deductionsHtml += buildSimpleCountBox('غياب بإذن', 'عدد الأيام');
+  deductionsHtml += buildSimpleCountBox('غياب بدون إذن', 'عدد الأيام');
   deductionsHtml += blankBlock('خصم نقدي', 'قيمة الخصم');
-  if(hasAdv) deductionsHtml += advs.map(a=>row(`سلفة نقدية${a.rs?' ('+a.rs+')':''}`, a.inst, '#e03131')).join('');
-  else deductionsHtml += blankLine('سلفة نقدية');
+  // ===== بند "السلفة النقدية" — نفس القيمة الرسمية اللي بيحسبها النظام
+  // فعليًا جوه calcSlip نفسها (slip.advInst)، من غير أي معادلة جديدة أو
+  // تكرار لأي مبلغ: لو السلفة مقسطة بيطلع قسط الشهر الحالي بس (مع حد أقصى
+  // الرصيد المتبقي عشان آخر قسط ماياخدش أكتر من اللازم)، ولو دفعة واحدة
+  // بيطلع المبلغ المستحق المتبقي منها، وأي سلفة خلصت سداد بالكامل
+  // (status!=='نشط') مُستبعدة تلقائيًا فمش بتظهر أصلًا =====
+  deductionsHtml += slip.advInst > 0 ? row('السلفة النقدية', slip.advInst) : blankLine('السلفة النقدية');
+  // ===== بند "المسحوبات / السلف" — خانة فاضية تمامًا يملاها المحاسب يدويًا
+  // بس (إجمالي شهري مقابل عمود "المسحوبات/السلف" اليومي في جدول الحضور)،
+  // من غير أي جلب بيانات تلقائي — بناءً على طلب صريح من المستخدم =====
+  deductionsHtml += blankLine('المسحوبات / السلف');
 
-  const selectedStyle = isSingleSelected ? 'border:2px solid #0ea5a0;box-shadow:0 0 0 4px #d1fae5' : 'border:1px solid #e2eaf6';
+  // ===== كانت علامة الاختيار (إيصال موظف واحد محدد) بتظهر بحد ملوّن
+  // (تيل) + ظل خلفية ملون (box-shadow) — ممنوعين في التصميم الجديد (بدون
+  // ألوان أو ظلال)، فبقت مجرد حد أسود أسمك بدل الحد العادي، من غير أي
+  // تأثير على منطق تحديد الموظف نفسه =====
+  const selectedStyle = isSingleSelected ? 'border:2.5px solid #000' : 'border:1px solid #000';
 
   return `
-    <div class="receipt-card" style="background:#fff;${selectedStyle};border-radius:14px;overflow:hidden;margin-bottom:18px;page-break-after:always;max-width:210mm;margin-left:auto;margin-right:auto;font-family:'Cairo',sans-serif">
+    <div class="receipt-card" style="background:#fff;color:#000;${selectedStyle};border-radius:14px;overflow:hidden;margin-bottom:18px;page-break-after:always;max-width:210mm;margin-left:auto;margin-right:auto;font-family:'Cairo',sans-serif">
 
       <!-- Header -->
-      <div style="background:linear-gradient(135deg,#0f2057,#1e3a8a);padding:16px 20px;display:flex;align-items:center;justify-content:space-between">
+      <div style="background:#fff;padding:14px 20px;border-bottom:2.5px solid #000;display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div style="font-size:16px;font-weight:800;color:#fff">زمزم <span style="color:#7dd8f5">Payroll</span></div>
-          <div style="font-size:10.5px;color:#93c5fd;margin-top:2px">إيصال راتب — ${cycleLabel}</div>
+          <div style="font-size:16px;font-weight:800;color:#000">زمزم <span style="color:#000">Payroll</span></div>
+          <div style="font-size:10.5px;color:#000;margin-top:2px;font-weight:600">إيصال راتب — ${cycleLabel}</div>
         </div>
         <div style="text-align:left">
-          <div style="font-size:10px;color:#7dd8f5">رقم الإيصال</div>
-          <div style="font-size:11.5px;font-weight:800;color:#fff;direction:ltr">${emp.cd||'—'}-${DB.cycle.y}${String(DB.cycle.m).padStart(2,'0')}</div>
-          ${pageNum?`<div style="font-size:9px;color:#93c5fd;margin-top:2px">صفحة ${pageNum}</div>`:''}
+          <div style="font-size:9.5px;color:#000;font-weight:600">رقم الإيصال</div>
+          <div style="font-size:11.5px;font-weight:800;color:#000;direction:ltr">${emp.cd||'—'}-${DB.cycle.y}${String(DB.cycle.m).padStart(2,'0')}</div>
+          ${pageNum?`<div style="font-size:9px;color:#000;margin-top:2px">صفحة ${pageNum}</div>`:''}
         </div>
       </div>
 
       <!-- بيانات الموظف -->
-      <div style="padding:12px 20px;background:#f8faff;border-bottom:2px dashed #e2eaf6;display:flex;align-items:center;gap:12px">
-        <div style="width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#0f2057,#0ea5a0);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#fff;flex-shrink:0">${ini}</div>
+      <div style="padding:12px 20px;background:#fff;border-bottom:2px dashed #000;display:flex;align-items:center;gap:12px">
+        <div style="width:42px;height:42px;border-radius:50%;background:#fff;border:2px solid #000;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#000;flex-shrink:0">${ini}</div>
         <div style="flex:1">
-          <div style="font-size:14px;font-weight:800;color:#0f2057">${emp.nm||'—'}</div>
+          <div style="font-size:14px;font-weight:800;color:#000">${emp.nm||'—'}</div>
           <div style="display:flex;gap:10px;margin-top:2px;flex-wrap:wrap">
-            <span style="font-size:10.5px;color:#4a5982">الكود: <strong>${emp.cd||'—'}</strong></span>
-            <span style="font-size:10.5px;color:#4a5982">القسم: <strong>${emp.dp||'—'}</strong></span>
-            <span style="font-size:10.5px;color:#4a5982">المسمى: <strong>${emp.ttl||'—'}</strong></span>
+            <span style="font-size:10.5px;color:#000">الكود: <strong>${emp.cd||'—'}</strong></span>
+            <span style="font-size:10.5px;color:#000">القسم: <strong>${emp.dp||'—'}</strong></span>
+            <span style="font-size:10.5px;color:#000">المسمى: <strong>${emp.ttl||'—'}</strong></span>
           </div>
         </div>
         <div style="text-align:center">
-          <div style="font-size:9.5px;color:#94a3b8">دورة</div>
-          <div style="font-size:11px;font-weight:800;color:#0f2057">${cycleLabel}</div>
+          <div style="font-size:9.5px;color:#000">دورة</div>
+          <div style="font-size:11px;font-weight:800;color:#000">${cycleLabel}</div>
         </div>
       </div>
 
-      <div style="padding:14px 20px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+      <div style="padding:12px 18px">
+        <div style="display:grid;grid-template-columns:0.95fr 1.2fr;gap:14px">
 
-          <!-- الاستحقاقات -->
+          <!-- إثبات الحضور اليومي + المسحوبات/السلف (عمود موحَّد بطول
+               الأيام الفعلي للشهر، حسب الشكل المطلوب) -->
           <div>
-            <div style="font-size:10.5px;font-weight:800;color:#0f2057;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #0f2057">الاستحقاقات</div>
+            ${buildDailyAttendanceLedger(emp, daysInMonth)}
+          </div>
+
+          <!-- الاستحقاقات + الاستقطاعات (فوق بعض في نفس العمود) -->
+          <div>
+            <div style="font-size:10px;font-weight:800;color:#000;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;padding-bottom:2px;border-bottom:2px solid #000">الاستحقاقات</div>
             ${entitlementsHtml}
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;background:#f0fdf4;border-radius:7px;padding:7px 9px">
-              <span style="font-size:12px;font-weight:800;color:#15803d">إجمالي الاستحقاقات</span>
-              <span style="font-size:12px;color:#86efac;border-bottom:1.5px solid #86efac;min-width:90px;text-align:center">.............. ج.م</span>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:5px;border:1.5px solid #000;border-radius:5px;padding:5px 8px">
+              <span style="font-size:11px;font-weight:800;color:#000">إجمالي الاستحقاقات</span>
+              <span style="font-size:11px;color:#000;border-bottom:1.5px solid #000;min-width:75px;text-align:center">.............. ج.م</span>
             </div>
-          </div>
 
-          <!-- الاستقطاعات -->
-          <div>
-            <div style="font-size:10.5px;font-weight:800;color:#e03131;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #e03131">الاستقطاعات</div>
+            <div style="font-size:10px;font-weight:800;color:#000;text-transform:uppercase;letter-spacing:.05em;margin-top:7px;margin-bottom:4px;padding-bottom:2px;border-bottom:2px solid #000">الاستقطاعات</div>
             ${deductionsHtml}
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;background:#fff0f0;border-radius:7px;padding:7px 9px">
-              <span style="font-size:12px;font-weight:800;color:#e03131">إجمالي الاستقطاعات</span>
-              <span style="font-size:12px;color:#fca5a5;border-bottom:1.5px solid #fca5a5;min-width:90px;text-align:center">.............. ج.م</span>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:5px;border:1.5px solid #000;border-radius:5px;padding:5px 8px">
+              <span style="font-size:11px;font-weight:800;color:#000">إجمالي الاستقطاعات</span>
+              <span style="font-size:11px;color:#000;border-bottom:1.5px solid #000;min-width:75px;text-align:center">.............. ج.م</span>
             </div>
           </div>
         </div>
-
-        <!-- المسحوبات الشهرية -->
-        <div style="margin-top:14px;padding-top:10px;border-top:1px dashed #e2eaf6">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <span style="font-size:11px;font-weight:800;color:#0f2057">المسحوبات الشهرية</span>
-          </div>
-          <table style="width:100%;border-collapse:collapse">
-            <thead><tr>
-              <th style="font-size:9.5px;color:#94a3b8;text-align:right;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">التاريخ</th>
-              <th style="font-size:9.5px;color:#94a3b8;text-align:right;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">البيان</th>
-              <th style="font-size:9.5px;color:#94a3b8;text-align:left;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">القيمة</th>
-              <th style="font-size:9.5px;color:#94a3b8;text-align:right;padding:3px 6px;border-bottom:1.5px solid #e2eaf6;border-right:1px dashed #e2eaf6">التاريخ</th>
-              <th style="font-size:9.5px;color:#94a3b8;text-align:right;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">البيان</th>
-              <th style="font-size:9.5px;color:#94a3b8;text-align:left;padding:3px 6px;border-bottom:1.5px solid #e2eaf6">القيمة</th>
-            </tr></thead>
-            <tbody>
-              ${Array.from({length:4}).map(()=>`<tr>
-                <td style="height:16px;border-bottom:1px dotted #e2eaf6"></td>
-                <td style="border-bottom:1px dotted #e2eaf6"></td>
-                <td style="border-bottom:1px dotted #e2eaf6"></td>
-                <td style="border-bottom:1px dotted #e2eaf6;border-right:1px dashed #e2eaf6"></td>
-                <td style="border-bottom:1px dotted #e2eaf6"></td>
-                <td style="border-bottom:1px dotted #e2eaf6"></td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;align-items:center">
-            <span style="font-size:11px;font-weight:800;color:#e03131">إجمالي المسحوبات</span>
-            <span style="font-size:11px;color:#fca5a5;border-bottom:1.5px solid #fca5a5;min-width:90px;text-align:center">.............. ج.م</span>
-          </div>
-        </div>
-
-        ${buildAttendanceCheckGrid(emp)}
 
         <!-- الصافي + التوقيع -->
-        <div style="margin-top:14px;border-top:2px dashed #e2eaf6;padding-top:12px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px">
-          <div style="background:#fff;border:1.5px dashed #0f2057;border-radius:9px;padding:11px;text-align:center">
-            <div style="font-size:10px;color:#0f2057;font-weight:800;margin-bottom:4px">صافي المرتب</div>
-            <div style="font-size:11px;color:#4a5982;border-top:1px solid #e2eaf6;padding-top:5px;margin-top:3px">........................</div>
-            <div style="font-size:9px;color:#0f2057;margin-top:2px">ج.م</div>
+        <div style="margin-top:8px;border-top:2px solid #000;padding-top:8px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px">
+          <div style="background:#fff;border:2px solid #000;border-radius:7px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:#000;font-weight:800;margin-bottom:3px">صافي المرتب</div>
+            <div style="font-size:12px;font-weight:800;color:#000;border-top:1px solid #000;padding-top:4px;margin-top:2px">........................</div>
+            <div style="font-size:9px;color:#000;margin-top:2px">ج.م</div>
           </div>
-          <div style="border:1.5px dashed #e2eaf6;border-radius:9px;padding:11px;text-align:center">
-            <div style="font-size:10px;color:#4a5982;margin-bottom:3px">توقيع الموظف</div>
-            <div style="height:24px;border-bottom:1px solid #e2eaf6;margin-top:10px"></div>
+          <div style="border:1.5px solid #000;border-radius:7px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:#000;margin-bottom:3px">توقيع الموظف</div>
+            <div style="height:20px;border-bottom:1px solid #000;margin-top:7px"></div>
           </div>
-          <div style="border:1.5px dashed #e2eaf6;border-radius:9px;padding:11px;text-align:center">
-            <div style="font-size:10px;color:#4a5982;margin-bottom:3px">اعتماد المدير</div>
-            <div style="height:24px;border-bottom:1px solid #e2eaf6;margin-top:10px"></div>
+          <div style="border:1.5px solid #000;border-radius:7px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:#000;margin-bottom:3px">اعتماد المدير</div>
+            <div style="height:20px;border-bottom:1px solid #000;margin-top:7px"></div>
           </div>
         </div>
 
-        <div style="margin-top:10px;text-align:center;font-size:9.5px;color:#94a3b8">
+        <div style="margin-top:6px;text-align:center;font-size:9px;color:#000">
           تم إنشاؤه بواسطة زمزم Payroll v1.0 — URCOD — Mahmoud Gamal El-Din
         </div>
       </div>
@@ -5408,7 +5449,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏬 شركة حلوانى الغربية</div>
+    <div class="company">🏛️ شركة حلوانى الغربية</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
