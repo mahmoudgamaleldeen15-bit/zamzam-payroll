@@ -2040,7 +2040,7 @@ function mergeAttFromRemote(localAtt, remoteAtt, issuesForLockCheck){
 
 // ===== تحديث وقت آخر تعديل على Firebase (يُستدعى بعد أي حفظ فعلي) =====
 async function fbTouchLastUpdate(key){
-  if(!fbOnline || !window._fb) return;
+  if(!fbOnline || !window._fb) return null;
   try{
     const { ref, set, db } = window._fb;
     const ts = new Date().toISOString();
@@ -2058,7 +2058,12 @@ async function fbTouchLastUpdate(key){
       const allTs = {}; FB_SYNC_KEYS.forEach(k=>{ allTs[k] = { ts }; });
       await set(ref(db, 'zz/_lastUpdateKeys'), allTs);
     }
-  } catch(e){}
+    // بنرجّع الطابع الزمني اللي اتأكد فعليًا على فايربيز، عشان المستدعي
+    // (لو حابب) يحدّث به علامة "آخر مزامنة" المحلية — ده مجرد إضافة لقيمة
+    // الإرجاع (كانت undefined قبل كده)، ومفيش أي استدعاء حالي للدالة دي
+    // كان بيستخدم القيمة المرجعة، فمفيش أي تأثير على أي سلوك قديم
+    return ts;
+  } catch(e){ return null; }
 }
 
 // ===== رفع كل البيانات لـ Firebase (Full Upload) =====
@@ -2077,7 +2082,17 @@ async function fbUploadAll(){
     }
   }
   // رفع وقت آخر تحديث
-  await fbTouchLastUpdate();
+  const _uploadTs = await fbTouchLastUpdate();
+  // نفس إصلاح البوكيبينج المحلي بعد تأكيد التوثيق — عشان مانعملش تنزيل
+  // غير ضروري لنفس البيانات دي تاني بعد الرفعة اليدوية الكاملة دي (مفيش
+  // أي تغيير في منطق الدمج أو حماية قرارات المحاسب هنا خالص)
+  if(_uploadTs){
+    try{
+      localStorage.setItem('zz_lastSync', _uploadTs);
+      const keysMap = {}; FB_SYNC_KEYS.forEach(k=>{ keysMap[k] = _uploadTs; });
+      localStorage.setItem('zz_lastSyncKeys', JSON.stringify(keysMap));
+    }catch(e){}
+  }
   toast(`✅ تم رفع ${success}/${FB_SYNC_KEYS.length} جداول لـ Firebase`, 'success');
   logActivity('رفع بيانات لـ Firebase', `${success} جدول`);
 }
@@ -2574,7 +2589,28 @@ function _svEnqueuePush(k){
       // نجدّد وقت "آخر كتابة محلية" هنا كمان — لحد ما العلامة توصل
       // فايربيز فعليًا ويرجع صداها، نفس الجدول يفضل محمي من التحديث اللحظي
       window._recentLocalWrites[k] = Date.now();
-      return fbTouchLastUpdate(k);
+      return fbTouchLastUpdate(k).then(ts=>{
+        // ===== الإصلاح الوحيد المطلوب هنا: بعد ما نتأكد إن الرفعة
+        // (Push) لنفس الجدول نجحت فعليًا ووصل توثيقها لفايربيز، نحدّث
+        // علامة "آخر مزامنة" المحلية (zz_lastSync / zz_lastSyncKeys) بنفس
+        // الطابع الزمني ده — عشان البرنامج "يعرف" إنه بالفعل متزامن ومحدّث
+        // تمامًا، فما يضطرش يعمل تنزيل (Download) غير ضروري لنفس البيانات
+        // دي تاني في أي فتح/تسجيل دخول جاي (وده اللي كان ممكن، في حالات
+        // نادرة، يرجّع نسخة قديمة فوق سجلات حضور سليمة ومكتملة). التعديل
+        // ده بخص فقط "هل نحتاج ننزّل تاني؟" — مبيلمسش خالص أي حاجة في دمج
+        // البيانات نفسه (mergeAttFromRemote / mergeIssuesFromRemote) ولا
+        // في نظام حماية قرارات المحاسب (isLockedAttRecord / isLockedIssue
+        // / hasAccountantLock)، اللي يفضل شغال 100% زي ما هو من غير أي
+        // تغيير
+        if(ts){
+          try{
+            localStorage.setItem('zz_lastSync', ts);
+            const keysMap = JSON.parse(localStorage.getItem('zz_lastSyncKeys') || '{}');
+            keysMap[k] = ts;
+            localStorage.setItem('zz_lastSyncKeys', JSON.stringify(keysMap));
+          }catch(e){}
+        }
+      });
     }
   }).catch(()=>{}).finally(()=>{
     // خلصت الرفعة دي (نجاح أو فشل) — نجدّد الطابع الزمني كمان كحماية
@@ -5372,7 +5408,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
+    <div class="company">🏬 شركة حلوانى الغربية</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
