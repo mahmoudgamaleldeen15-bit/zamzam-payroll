@@ -1839,7 +1839,7 @@ window.addEventListener('online', async ()=>{
     toast('✅ رجع الاتصال بالإنترنت — جاري رفع أي بيانات اتحفظت وانت أوفلاين...', 'info');
     await reconnectFirebase();
     if(fbOnline){
-      await fbUploadAll();
+      await fbUploadAll({auto:true});
       try{ fbStartRealtimeSync(); }catch(e){}
       try{ listenFpStatusInfo(); }catch(e){}
     }
@@ -1873,7 +1873,7 @@ async function firebaseHealthCheck(){
       await reconnectFirebase();
       if(fbOnline){
         try{ toast('✅ رجع الاتصال بفايربيز — جاري رفع أي بيانات معلّقة','success'); }catch(e){}
-        try{ await fbUploadAll(); }catch(e){}
+        try{ await fbUploadAll({auto:true}); }catch(e){}
         try{ fbStartRealtimeSync(); }catch(e){}
         try{ listenFpStatusInfo(); }catch(e){}
       }
@@ -2066,34 +2066,94 @@ async function fbTouchLastUpdate(key){
   } catch(e){ return null; }
 }
 
+// =====================================================================
+// 🛡️ حماية من فقدان بيانات السحابة (Data-Loss Guard) — بعد حادثة مسح
+// بيانات فايربيز: جهاز أو نسخة محلية بتخزين فاضي (متصفح جديد، ملف محلي،
+// مسح بيانات الموقع) كان بيتصل بفايربيز ويرفع جداوله الفاضية "كل البيانات"
+// قبل ما ينزّل الحقيقية — وفايربيز بيحذف أي عقدة بتتكتب فيها قائمة فاضية
+// — فكان بيمسح السحابة كلها. الحمايات دي بتخص الرفع الكامل (fbUploadAll)
+// بس، ومفيهاش أي تغيير في الحفظ العادي (sv) ولا في دمج/حماية قرارات
+// المحاسب.
+// =====================================================================
+// بيتحوّل true لما محاولة المزامنة (التنزيل) عند تسجيل الدخول تخلص —
+// نجحت أو فشلت أو فايربيز مش متاح — ومن قبلها الرفع الكامل التلقائي ممنوع
+window._fbInitialSyncDone = false;
+
+function _isEmptyForSync(d){
+  return d === null || d === undefined
+    || (Array.isArray(d) && d.length === 0)
+    || (typeof d === 'object' && !Array.isArray(d) && Object.keys(d).length === 0);
+}
+
+// بيستنى لحد ما مزامنة الدخول الأولى تخلص (أقصى مدة maxMs)، وبيرجّع
+// true لو خلصت فعلًا — بيُستخدم من مزامنة البصمة على جهاز فاضي
+async function _waitInitialCloudSync(maxMs){
+  const t0 = Date.now();
+  while(!window._fbInitialSyncDone && (Date.now() - t0) < maxMs){
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return !!window._fbInitialSyncDone;
+}
+
 // ===== رفع كل البيانات لـ Firebase (Full Upload) =====
-async function fbUploadAll(){
+// opts.auto = true لما الاستدعاء تلقائي (رجوع النت / فحص الاتصال الدوري)،
+// واليدوي (زر "رفع كل البيانات") بيفضل زي ما هو مع نفس الحمايات الأساسية
+async function fbUploadAll(opts){
+  const auto = !!(opts && opts.auto);
   if(!fbOnline){
     toast('غير متصل بـ Firebase', 'error');
     return;
   }
+  // 🛡️ حماية 1: ممنوع أي رفع كامل قبل ما مزامنة الدخول (التنزيل من
+  // السحابة) تخلص — عشان الجهاز مايرفعش حاجة قبل ما يعرف إيه اللي على السحابة
+  if(!window._fbInitialSyncDone){
+    console.warn('fbUploadAll: اتأجّل — مزامنة الدخول من السحابة لسه ما خلصتش');
+    if(!auto) toast('⏳ استنى لحظة لحد ما مزامنة الدخول من السحابة تخلص، وبعدها جرّب الرفع تاني', 'warning');
+    return;
+  }
+  // 🛡️ حماية 2: جهاز مفيهوش أي موظف محليًا مينفعش يعمل رفع كامل أبدًا —
+  // ده معناه إنه جهاز فاضي/جديد والرفع هيمسح بيانات السحابة
+  if(!Array.isArray(DB.emp) || DB.emp.length === 0){
+    console.warn('fbUploadAll: اتوقف — الجهاز مفيهوش موظفين');
+    if(!auto) toast('⛔ تم إيقاف الرفع الكامل: الجهاز ده مفيهوش أي موظفين، والرفع كان هيمسح بيانات السحابة. استخدم "جلب البيانات من Firebase" أو "استعادة نسخة" الأول.', 'error');
+    return;
+  }
   toast('جاري رفع البيانات...', 'info');
-  let success = 0;
+  // جهاز عمره ما نزّل بيانات من السحابة خالص (مفيش zz_lastSync)
+  const neverSynced = !localStorage.getItem('zz_lastSync');
+  let keyMarkers = {};
+  try{ keyMarkers = JSON.parse(localStorage.getItem('zz_lastSyncKeys') || '{}') || {}; }catch(e){}
+  let success = 0, skipped = 0;
+  const pushedKeys = [];
   for(const k of FB_SYNC_KEYS){
     const data = DB[k] || JSON.parse(localStorage.getItem('zz_'+k)||'null');
     if(data !== null){
+      // 🛡️ حماية 3: جدول فاضي محليًا ومالوش علامة مزامنة على الجهاز ده
+      // مينفعش يكون "مسح متعمَّد" من الجهاز ده — فمنرفعش الفاضي ونمسح بيه
+      // الجدول من السحابة
+      if(_isEmptyForSync(data) && !keyMarkers[k]){ skipped++; continue; }
+      // 🛡️ حماية 4 (للرفع التلقائي بس): جهاز عمره ما نزّل بيانات مينفعش
+      // يكتب فوق جدول موجود فعلًا على السحابة
+      if(auto && neverSynced){
+        const remote = await fbPull(k);
+        if(!_isEmptyForSync(remote)){ skipped++; continue; }
+      }
       const ok = await fbPush(k, data);
-      if(ok) success++;
+      if(ok){ success++; pushedKeys.push(k); }
     }
   }
-  // رفع وقت آخر تحديث
-  const _uploadTs = await fbTouchLastUpdate();
-  // نفس إصلاح البوكيبينج المحلي بعد تأكيد التوثيق — عشان مانعملش تنزيل
-  // غير ضروري لنفس البيانات دي تاني بعد الرفعة اليدوية الكاملة دي (مفيش
-  // أي تغيير في منطق الدمج أو حماية قرارات المحاسب هنا خالص)
-  if(_uploadTs){
+  // رفع وقت آخر تحديث (بس لو فعلًا اترفع حاجة)
+  const _uploadTs = success > 0 ? await fbTouchLastUpdate() : null;
+  // بنسجّل علامة المزامنة لكل جدول اترفع فعلًا بس (مش علامة "أنا محدّث"
+  // العامة، ومش لجداول اتخطّت) — عشان الجهاز الفاضي يفضل ينزّل بياناته
+  if(_uploadTs && pushedKeys.length){
     try{
-      localStorage.setItem('zz_lastSync', _uploadTs);
-      const keysMap = {}; FB_SYNC_KEYS.forEach(k=>{ keysMap[k] = _uploadTs; });
+      const keysMap = JSON.parse(localStorage.getItem('zz_lastSyncKeys') || '{}');
+      pushedKeys.forEach(k=>{ keysMap[k] = _uploadTs; });
       localStorage.setItem('zz_lastSyncKeys', JSON.stringify(keysMap));
     }catch(e){}
   }
-  toast(`✅ تم رفع ${success}/${FB_SYNC_KEYS.length} جداول لـ Firebase`, 'success');
+  toast(`✅ تم رفع ${success}/${FB_SYNC_KEYS.length} جداول لـ Firebase${skipped?` (اتخطّى ${skipped} جدول فاضي/محمي)`:''}`, 'success');
   logActivity('رفع بيانات لـ Firebase', `${success} جدول`);
 }
 
@@ -2221,7 +2281,10 @@ async function fbAutoSyncOnLogin(){
       fbTs = new Date().toISOString(); // اعتبرها تحديث "جديد" ونزّلها فورًا
     }
 
-    const localTs = localStorage.getItem('zz_lastSync') || '';
+    // جهاز مفيهوش أي موظفين = جهاز فاضي/جديد: علامة المزامنة المحلية مش موثوقة
+    // عليه (حتى لو طابقت السحابة) فنعتبرها فاضية وننزّل بياناته دايمًا
+    const _deviceHasEmp = Array.isArray(DB.emp) && DB.emp.length > 0;
+    const localTs = _deviceHasEmp ? (localStorage.getItem('zz_lastSync') || '') : '';
 
     // لو Firebase أحدث من النسخة المحلية (أو أول مرة) → نجيب التحديثات
     if(fbTs !== localTs){
@@ -2251,10 +2314,12 @@ async function fbAutoDownloadChanges(fbTs){
   } catch(e){}
   const _localKeyTs = JSON.parse(localStorage.getItem('zz_lastSyncKeys') || '{}');
   const _newLocalKeyTs = {..._localKeyTs};
+  // جهاز فاضي (مفيهوش موظفين): مفيش علامة بتتصدق، ننزّل كل جدول موجود في السحابة
+  const _forceFullDownload = !(Array.isArray(DB.emp) && DB.emp.length > 0);
 
   for(const k of FB_SYNC_KEYS){
     // تخطي آمن — بس لو عندنا علامة موثوقة إن الجدول ده لسه زي ما هو
-    if(_keyTs && _keyTs[k] && _keyTs[k].ts && _localKeyTs[k] === _keyTs[k].ts) continue;
+    if(!_forceFullDownload && _keyTs && _keyTs[k] && _keyTs[k].ts && _localKeyTs[k] === _keyTs[k].ts) continue;
     try{
       const snap = await get(ref(db, 'zz/'+k));
       if(!snap.exists()) continue;
@@ -2459,19 +2524,27 @@ function showSyncChangesNotification(changes, fbTs){
 
 // ===== تهيئة Firebase عند الدخول =====
 async function initFirebaseOnLogin(){
-  await initFirebase();
-  if(fbOnline){
-    // جلب Auth (مستخدمين + هاش الأدمن) من Firebase
-    await syncAuthFromFirebase();
-    // مراقبة تغييرات Auth في الوقت الفعلي
-    fbWatchAuthChanges();
-    // Auto Sync للبيانات
-    await fbAutoSyncOnLogin();
-    // مراقبة التحديثات اللحظية
-    fbStartRealtimeSync();
-    // إعلام بصري بس عن حالة البصمة على باقي الأجهزة — معزول تمامًا،
-    // أي خطأ هنا ميوقفش باقي عملية تسجيل الدخول أو الاتصال بفايربيز
-    try{ listenFpStatusInfo(); } catch(e){}
+  // علامة "مزامنة الدخول الأولى خلصت" — الرفع الكامل (fbUploadAll) وبصمة
+  // الجهاز الجديد بيستنوها عشان جهاز فاضي/جديد ميرفعش حاجة للسحابة قبل ما
+  // ينزّل بياناته منها (سبب حادثة مسح البيانات)
+  window._fbInitialSyncDone = false;
+  try{
+    await initFirebase();
+    if(fbOnline){
+      // جلب Auth (مستخدمين + هاش الأدمن) من Firebase
+      await syncAuthFromFirebase();
+      // مراقبة تغييرات Auth في الوقت الفعلي
+      fbWatchAuthChanges();
+      // Auto Sync للبيانات
+      await fbAutoSyncOnLogin();
+      // مراقبة التحديثات اللحظية
+      fbStartRealtimeSync();
+      // إعلام بصري بس عن حالة البصمة على باقي الأجهزة — معزول تمامًا،
+      // أي خطأ هنا ميوقفش باقي عملية تسجيل الدخول أو الاتصال بفايربيز
+      try{ listenFpStatusInfo(); } catch(e){}
+    }
+  } finally {
+    window._fbInitialSyncDone = true;
   }
 }
 
@@ -2590,21 +2663,18 @@ function _svEnqueuePush(k){
       // فايربيز فعليًا ويرجع صداها، نفس الجدول يفضل محمي من التحديث اللحظي
       window._recentLocalWrites[k] = Date.now();
       return fbTouchLastUpdate(k).then(ts=>{
-        // ===== الإصلاح الوحيد المطلوب هنا: بعد ما نتأكد إن الرفعة
-        // (Push) لنفس الجدول نجحت فعليًا ووصل توثيقها لفايربيز، نحدّث
-        // علامة "آخر مزامنة" المحلية (zz_lastSync / zz_lastSyncKeys) بنفس
-        // الطابع الزمني ده — عشان البرنامج "يعرف" إنه بالفعل متزامن ومحدّث
-        // تمامًا، فما يضطرش يعمل تنزيل (Download) غير ضروري لنفس البيانات
-        // دي تاني في أي فتح/تسجيل دخول جاي (وده اللي كان ممكن، في حالات
-        // نادرة، يرجّع نسخة قديمة فوق سجلات حضور سليمة ومكتملة). التعديل
-        // ده بخص فقط "هل نحتاج ننزّل تاني؟" — مبيلمسش خالص أي حاجة في دمج
-        // البيانات نفسه (mergeAttFromRemote / mergeIssuesFromRemote) ولا
-        // في نظام حماية قرارات المحاسب (isLockedAttRecord / isLockedIssue
-        // / hasAccountantLock)، اللي يفضل شغال 100% زي ما هو من غير أي
-        // تغيير
+        // بعد ما نتأكد إن الرفعة (Push) لنفس الجدول نجحت فعليًا ووصل توثيقها
+        // لفايربيز، نحدّث علامة الجدول ده بس (zz_lastSyncKeys) — عشان ميعملش
+        // تنزيل غير ضروري لنفس الجدول تاني.
+        // ملحوظة: العلامة العامة (zz_lastSync) مبقتش بتتكتب من هنا؛ لأنها
+        // كانت بتخلّي جهاز فاضي/جديد يعتبر نفسه "متزامن" بمجرد حفظ أي جدول
+        // صغير، فيتخطى تنزيل باقي بياناته من السحابة. العلامة العامة بتتكتب
+        // بس بعد تنزيل كامل (fbAutoDownloadChanges). التعديل ده مبيلمسش
+        // دمج البيانات (mergeAttFromRemote / mergeIssuesFromRemote) ولا
+        // حماية قرارات المحاسب (isLockedAttRecord / isLockedIssue /
+        // hasAccountantLock)
         if(ts){
           try{
-            localStorage.setItem('zz_lastSync', ts);
             const keysMap = JSON.parse(localStorage.getItem('zz_lastSyncKeys') || '{}');
             keysMap[k] = ts;
             localStorage.setItem('zz_lastSyncKeys', JSON.stringify(keysMap));
@@ -5449,7 +5519,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏛️ شركة حلوانى الغربية</div>
+    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -7208,6 +7278,13 @@ function startServerMonitor(){
 // ===== المنطق الأساسي لجلب ودمج بيانات البصمة (يُستخدم في المزامنة اليومية واللحظية معًا) =====
 async function performFingerprintSync(){
   const result = {serverOk:false, newEmps:0, added:0, updated:0, preserved:0};
+  // حماية الجهاز الفاضي/الجديد: لو مفيش موظفين محليًا، مننفّذش مزامنة البصمة
+  // قبل ما بيانات السحابة تتنزّل — وإلا هتستورد الموظفين بمرتب صفر وتكتب
+  // قواعد ناقصة وتتبعت للسحابة. لو السحابة نفسها فاضية فعلاً بنكمّل عادي.
+  if(!(Array.isArray(DB.emp) && DB.emp.length > 0) && !window._fbInitialSyncDone){
+    const _ready = await _waitInitialCloudSync(20000);
+    if(!_ready) return result;
+  }
   try {
     const res = await fetch('http://localhost:7788/ping', {signal: AbortSignal.timeout(2000)});
     const data = await res.json();
