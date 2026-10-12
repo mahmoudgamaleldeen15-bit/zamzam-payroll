@@ -242,6 +242,10 @@ body.auth-mode {
       <button onclick="doLogin()" style="width:100%;background:linear-gradient(135deg,#0ea5a0,#0f2057);color:#fff;border:none;border-radius:12px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;font-family:'Cairo',sans-serif;transition:.2s" onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
         <span style="margin-left:8px">🔑</span> دخول
       </button>
+      <div style="text-align:center;margin-top:12px">
+        <a href="#" onclick="exportDeviceBackupNoLogin();return false" style="font-size:11.5px;color:#7dd8f5;text-decoration:underline;cursor:pointer">💾 حفظ نسخة من بيانات الجهاز ده (من غير دخول ولا اتصال)</a>
+        <div id="device-backup-msg" style="display:none;margin-top:8px;font-size:12px;font-weight:700;color:#86efac"></div>
+      </div>
 
       <!-- URCOD Footer -->
       <div id="urcod-click-area" style="margin-top:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;user-select:none" onclick="handleUrcodClick()">
@@ -6162,6 +6166,38 @@ function exportBackup(){
   a.download=`zamzam_backup_${new Date().toISOString().slice(0,10)}.json`;
   a.click();
   toast('✅ تم تصدير النسخة الاحتياطية الكاملة','success');
+}
+
+// نسخة احتياطية من شاشة تسجيل الدخول — بتقرأ بيانات الجهاز المحلية زي ما هي
+// (localStorage) وتنزّلها ملف JSON بنفس صيغة exportBackup. للقراءة بس: مفيهاش
+// أي اتصال بفايربيز ولا كتابة في أي بيانات، فآمنة على جهاز قديم قبل الدخول.
+function exportDeviceBackupNoLogin(){
+  try{
+    const backup = { version:'1.0', exportDate:new Date().toISOString(), source:'device-no-login' };
+    let tables = 0;
+    FB_SYNC_KEYS.forEach(k=>{
+      let v = null;
+      try{ const raw = localStorage.getItem('zz_'+k); if(raw) v = JSON.parse(raw); }catch(e){}
+      if(v === null || v === undefined) v = DB[k];
+      if(v !== null && v !== undefined){ backup[k] = v; tables++; }
+    });
+    const empCount = Array.isArray(backup.emp) ? backup.emp.length : 0;
+    const blob = new Blob([JSON.stringify(backup,null,2)], {type:'application/json;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `zamzam_backup_device_${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 10000);
+    const _m = `✅ تم حفظ نسخة من الجهاز: ${empCount} موظف — ${tables} جدول (شوف مجلد Downloads)`;
+    const _el = document.getElementById('device-backup-msg');
+    if(_el){ _el.style.display='block'; _el.style.color = empCount ? '#86efac' : '#fca5a5'; _el.textContent = empCount ? _m : '⚠️ الجهاز ده مفيهوش موظفين محفوظين — تم تنزيل ملف فاضي تقريبًا'; }
+    toast(_m, empCount ? 'success' : 'warning');
+  }catch(e){
+    const _el = document.getElementById('device-backup-msg');
+    if(_el){ _el.style.display='block'; _el.style.color='#fca5a5'; _el.textContent='تعذّر حفظ النسخة: '+e.message; }
+    toast('تعذّر حفظ النسخة: '+e.message, 'error');
+  }
 }
 
 function importBackup(input){
