@@ -890,6 +890,7 @@ body.auth-mode {
     <button class="tb" id="rt-draws"      onclick="switchReport('draws')"><span class="ms ms-sm">payments</span> المسحوبات</button>
     <button class="tb" id="rt-charity"     onclick="switchReport('charity')"><span class="ms ms-sm">volunteer_activism</span> الصدقات</button>
     <button class="tb" id="rt-expenses"    onclick="switchReport('expenses')"><span class="ms ms-sm">account_balance_wallet</span> مصروفات الشهر</button>
+    <button class="tb" id="rt-exec"        onclick="switchReport('exec')"><span class="ms ms-sm">monitoring</span> التقرير الإداري الشامل</button>
   </div>
 
   <!-- Report Content -->
@@ -2742,6 +2743,7 @@ function applyMonth(){
   if(typeof scanAttendanceIssues==='function') scanAttendanceIssues();
   if(typeof renderActionTracking==='function') renderActionTracking();
   if(typeof updateNotifDot==='function') updateNotifDot();
+  try{ if(typeof currentReport!=='undefined' && currentReport==='exec' && document.getElementById('page-reports')?.classList.contains('active')) renderReport('exec'); }catch(e){}
 }
 
 // ===================== CALC ENGINE =====================
@@ -7951,7 +7953,7 @@ function openAbout(){
 
 // ===================== REPORTS ENGINE =====================
 const MONTHS_AR_R = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];let currentReport = 'payroll';let reportData = [];function switchReport(type){
-  currentReport = type;['payroll','employees','attendance','daily','advances','rent','draws','charity','expenses'].forEach(t=>{
+  currentReport = type;['payroll','employees','attendance','daily','advances','rent','draws','charity','expenses','exec'].forEach(t=>{
     const btn = document.getElementById('rt-'+t);if(btn) btn.classList.toggle('on', t===type);});renderReport(type);}
 
 function renderReport(type){
@@ -7965,6 +7967,7 @@ function renderReport(type){
     draws:reportDraws,
     charity:reportCharity,
     expenses:reportExpenses,
+    exec:reportExec,
   };if(handlers[type]) handlers[type](el);}
 
 // ===== مصروفات الشهر — قسم مستقل داخل مركز التقارير =====
@@ -8199,6 +8202,1182 @@ function printRentStatement(){
 
   window.print();
 }
+
+// ===== التقرير الإداري الشهري الشامل (طبقة قراءة فقط) — بداية =====
+// ================================================================
+// التقرير الإداري الشهري الشامل — Executive Monthly Report
+// طبقة قراءة وتحليل فقط (Read-Only): مفيهاش أي استدعاء لـ sv() ولا أي
+// كتابة على DB أو localStorage أو Firebase (الاستثناء الوحيد: رقم واتساب
+// الإدارة اللي بيحفظه الأدمن صراحةً من لوحة الأدمن).
+// ================================================================
+const ER_COMPANY = 'شركة زمزم للمطاعم والحلويات';
+const ER_WA_KEY = 'zz_exec_wa';
+const ER_WA_FB_PATH = 'zz_auth/exec_wa';
+window._erData = null;
+
+// ---------- أدوات عامة ----------
+function erPrevYM(y,m){ return m===1 ? {y:y-1,m:12} : {y:y,m:m-1}; }
+function erNum(v){ const n = Number(v); return isFinite(n) ? n : 0; }
+function erIsNum(v){ return v!==null && v!==undefined && v!=='' && isFinite(Number(v)); }
+function erF(v){ return erIsNum(v) ? fc(Math.round(Number(v))) : '—'; }
+function erMoney(v){ return erIsNum(v) ? erF(v)+' ج.م' : '—'; }
+function erH(v){ return erIsNum(v) ? Number(v).toLocaleString('ar-EG',{maximumFractionDigits:1}) : '—'; }
+function erP(p){
+  if(p===null||p===undefined||!isFinite(p)) return '—';
+  const s = p>0.0001?'+':(p<-0.0001?'−':'');
+  return s+Math.abs(p).toLocaleString('ar-EG',{maximumFractionDigits:1})+'%';
+}
+function erTodayStr(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function erEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// تغيير بين قيمتين — يفرّق بين "مفيش بيانات للشهر السابق" و"الشهر السابق = صفر"
+function erChg(cur, prev){
+  const c = erIsNum(cur) ? Number(cur) : null;
+  const p = erIsNum(prev) ? Number(prev) : null;
+  if(c===null || p===null) return {cur:c, prev:p, diff:null, pct:null, state:'nodata'};
+  const diff = c - p;
+  if(p===0) return {cur:c, prev:p, diff, pct:null, state:'zeroprev'};
+  return {cur:c, prev:p, diff, pct:((c-p)/p)*100, state:'ok'};
+}
+function erChgText(ch){
+  if(!ch || ch.state==='nodata') return 'لا تتوفر بيانات للشهر السابق';
+  if(ch.state==='zeroprev') return (ch.cur===0 ? 'لا تغيير (صفر في الشهرين)' : 'غير قابل لحساب نسبة التغير');
+  return erP(ch.pct);
+}
+
+// تنفيذ دالة قراءة على شهر تاني بشكل مؤقت في الذاكرة فقط — بدون sv() ولا
+// أي رسم، ورجوع فوري للقيمة الأصلية حتى لو حصل خطأ (try/finally)
+function erWithCycle(y,m,fn){
+  const saved = DB.cycle;
+  DB.cycle = {y:y, m:m};
+  try{ return fn(); } finally { DB.cycle = saved; }
+}
+function erGetArchive(y,m){
+  return (DB.archives||[]).find(a=>a && a.type==='monthly' && Number(a.y)===Number(y) && Number(a.m)===Number(m)) || null;
+}
+function erMonthHasAtt(y,m){
+  return (DB.att||[]).some(a=>Number(a.y)===Number(y) && Number(a.m)===Number(m));
+}
+
+// ---------- المرتبات ----------
+function erActiveSlips(){
+  return DB.emp.filter(e=>e.st==='نشط').map(e=>Object.assign({eid:e.id,nm:e.nm,cd:e.cd,dp:e.dp||'—'}, calcSlip(e)));
+}
+// مصدر كشف مرتبات شهر معيّن: مباشر (الشهر الحالي) ← نسخة مؤرشفة ← إعادة احتساب (لو فيه حضور) ← غير متاح
+function erPayrollFor(y,m){
+  if(Number(DB.cycle.y)===Number(y) && Number(DB.cycle.m)===Number(m)){
+    return {src:'live', label:'مباشر من كشف المرتبات', slips:erActiveSlips()};
+  }
+  const arc = erGetArchive(y,m);
+  if(arc && arc.snapshot && Array.isArray(arc.snapshot.payrollSlips)){
+    return {src:'archive', label:'نسخة مؤرشفة مجمّدة', slips:arc.snapshot.payrollSlips, arc:arc};
+  }
+  if(erMonthHasAtt(y,m)){
+    let slips = null;
+    try{ slips = erWithCycle(Number(y),Number(m),()=>erActiveSlips()); }catch(e){ slips = null; }
+    if(slips) return {src:'recalc', label:'إعادة احتساب من سجلات الشهر بالقواعد الحالية (الشهر غير مؤرشف)', slips:slips};
+  }
+  return {src:'none', label:'غير متاح', slips:null};
+}
+function erAggSlips(slips){
+  const a = {count:0, paid:0, basic:0, allow:0, ot:0, otHrs:0, gross:0, deduct:0, ins:0, net:0, adv:0, draws:0, pen:0, earlyDep:0, earlyHrs:0, unAuthDays:0, lateCount:0};
+  if(!Array.isArray(slips)) return null;
+  slips.forEach(s=>{
+    a.count++;
+    if(erNum(s.gross)>0) a.paid++;
+    a.basic += erNum(s.basic); a.allow += erNum(s.allow); a.ot += erNum(s.otVal); a.otHrs += erNum(s.otHrs);
+    a.gross += erNum(s.gross); a.deduct += erNum(s.deduct); a.ins += erNum(s.insEmp); a.net += erNum(s.net);
+    a.adv += erNum(s.advInst); a.draws += erNum(s.drawsTotal); a.pen += erNum(s.pen); a.earlyDep += erNum(s.earlyDepVal); a.earlyHrs += erNum(s.earlyDepHours);
+    a.unAuthDays += erNum(s.unAuthDays); a.lateCount += erNum(s.lateCount);
+  });
+  return a;
+}
+// مرتبات الفرعين المُدخلة يدويًا — null لو مفيش سجل للشهر (غير مُدخل) بدل صفر مضلل
+function erBranchFor(y,m){
+  const rec = (DB.monthlyExpenses||[]).find(r=>Number(r.y)===Number(y)&&Number(r.m)===Number(m));
+  if(!rec) return {main:null, shub:null, entered:false};
+  const has = k => (rec[k]!==undefined && rec[k]!==null && rec[k]!=='');
+  return {main: has('mainBranch') ? erNum(rec.mainBranch) : null, shub: has('shubramlis') ? erNum(rec.shubramlis) : null, entered:true};
+}
+
+// ---------- الإيجارات ----------
+function erRentFor(y,m){
+  const cy = Number(DB.cycle.y), cm = Number(DB.cycle.m);
+  if(cy===Number(y) && cm===Number(m)){
+    const act = (DB.rent||[]).filter(r=>r.status==='نشط');
+    return {src:'live', label:'من تاب الإيجارات (الحالي)', total:act.reduce((s,r)=>s+erNum(r.curr||r.base),0), count:act.length};
+  }
+  const arc = erGetArchive(y,m);
+  if(arc && arc.snapshot && Array.isArray(arc.snapshot.rent)){
+    const act = arc.snapshot.rent.filter(r=>r.status==='نشط');
+    return {src:'archive', label:'نسخة مؤرشفة', total:act.reduce((s,r)=>s+erNum(r.curr||r.base),0), count:act.length};
+  }
+  // من سجل تغيّر قيمة كل عقد (history) — للعقود النشطة حاليًا فقط
+  const key = Number(y)*12+Number(m);
+  let total = 0, count = 0, known = false;
+  (DB.rent||[]).filter(r=>r.status==='نشط').forEach(r=>{
+    const h = Array.isArray(r.history) ? r.history.filter(e=>e && erIsNum(e.y) && erIsNum(e.m)) : [];
+    let startKey = null;
+    if(h.length) startKey = Math.min.apply(null, h.map(e=>Number(e.y)*12+Number(e.m)));
+    if(r.createdAt){ const d = new Date(r.createdAt); if(!isNaN(d)){ const k2 = d.getFullYear()*12+(d.getMonth()+1); startKey = startKey===null ? k2 : Math.min(startKey,k2); } }
+    if(startKey===null || startKey>key) return; // العقد لم يكن مسجلًا في الشهر ده
+    known = true;
+    const upTo = h.filter(e=>Number(e.y)*12+Number(e.m)<=key).sort((a,b)=>(Number(a.y)*12+Number(a.m))-(Number(b.y)*12+Number(b.m)));
+    const val = upTo.length ? erNum(upTo[upTo.length-1].val) : erNum(r.base);
+    total += Math.round(val); count++;
+  });
+  if(!known) return {src:'none', label:'غير متاح (لا عقود مسجلة بالنظام في ذلك الشهر)', total:null, count:null};
+  return {src:'history', label:'من سجل تغيّر قيمة العقود', total:total, count:count};
+}
+
+// ---------- المسحوبات / الصدقات / السلف ----------
+function erDrawsFor(y,m){
+  const list = (DB.draws||[]).filter(d=>Number(d.y)===Number(y)&&Number(d.m)===Number(m));
+  return {total:list.reduce((s,d)=>s+erNum(d.am),0), count:list.length};
+}
+function erCharityFor(y,m){
+  const list = (DB.chr||[]).filter(c=>Number(c.y)===Number(y)&&Number(c.m)===Number(m));
+  const recv = DB.charityRecv||[];
+  let total = 0, got = 0, gotCount = 0;
+  list.forEach(c=>{
+    const am = erNum(c.am); total += am;
+    const r = recv.find(x=>x.chrId===c.id && Number(x.y)===Number(y) && Number(x.m)===Number(m));
+    if(r && r.status==='استلم'){ got += am; gotCount++; }
+  });
+  return {total:total, count:list.length, received:got, receivedCount:gotCount, unreceived:total-got, unreceivedCount:list.length-gotCount};
+}
+function erAdvFor(y,m,agg){
+  const mm = String(m).padStart(2,'0');
+  const fresh = (DB.adv||[]).filter(a=>a.dt && String(a.dt).startsWith(y+'-'+mm));
+  const act = (DB.adv||[]).filter(a=>a.status==='نشط');
+  return {
+    newTotal: fresh.reduce((s,a)=>s+erNum(a.am),0), newCount: fresh.length,
+    instDue: agg ? agg.adv : null,
+    remaining: act.reduce((s,a)=>s+erNum(a.rem),0), activeCount: act.length,
+    empWithActive: new Set(act.map(a=>a.eid)).size,
+    repaidCum: (DB.adv||[]).reduce((s,a)=>s+Math.max(0,erNum(a.am)-erNum(a.rem)),0)
+  };
+}
+
+// ---------- الحضور والانضباط ----------
+function erAttendanceFor(y,m,emps,attAll){
+  const recs = (attAll||[]).filter(a=>Number(a.y)===Number(y)&&Number(a.m)===Number(m));
+  const byEmp = {}; recs.forEach(r=>{ (byEmp[r.eid]=byEmp[r.eid]||[]).push(r); });
+  const today = erTodayStr();
+  const T = {y:y, m:m, hasRecords:recs.length>0, totalEmp:emps.length, exempt:0, measured:0, disciplined:0, withLate:0,
+    lateCases:0, lateMins:0, perm:0, unauth:0, annual:0, official:0, rest:0, comp:0, missingOut:0, present:0, required:0, regular:0, rows:[]};
+  emps.forEach(emp=>{
+    const rs = byEmp[emp.id]||[];
+    const row = {eid:emp.id, nm:emp.nm, cd:emp.cd, exempt:!!emp.attExempt, present:0, perm:0, unauth:0, annual:0, official:0, rest:0, comp:0, lateDays:0, lateMins:0, missingOut:0, required:0, regular:0};
+    const grace = (emp.lateEx && Number(emp.lateGrace||0)>0) ? Number(emp.lateGrace) : gr('lt_gr',15);
+    const days = {};
+    rs.slice().sort((a,b)=>String(a.ti||'').localeCompare(String(b.ti||''))).forEach(r=>{ (days[r.dt]=days[r.dt]||[]).push(r); });
+    Object.keys(days).forEach(dt=>{
+      const list = days[dt];
+      const pres = list.find(r=>r.st==='حضور'||!r.st);
+      const first = pres || list[0];
+      const st = first.st||'';
+      if(pres){
+        row.present++; row.required++;
+        const late = (!emp.lateExempt && !emp.attExempt) ? calcLateMinutes(pres, emp) : 0;
+        if(late>grace){ row.lateDays++; row.lateMins += late; } else row.regular++;
+        if(pres.ti && !list.some(r=>r.to) && dt<today) row.missingOut++;
+      }
+      else if(st==='غياب بإذن'||st==='غياب'){ row.perm++; row.required++; }
+      else if(st==='غياب بدون إذن'){ row.unauth++; row.required++; }
+      else if(st==='إجازة اعتيادية') row.annual++;
+      else if(st==='إجازة رسمية') row.official++;
+      else if(st==='راحة أسبوعية') row.rest++;
+      else if(st==='يوم بدل راحة') row.comp++;
+    });
+    T.rows.push(row);
+    T.annual += row.annual; T.official += row.official; T.rest += row.rest; T.comp += row.comp; T.missingOut += row.missingOut;
+    if(row.exempt){ T.exempt++; return; }
+    if(row.required>0){
+      T.measured++;
+      T.required += row.required; T.regular += row.regular; T.present += row.present;
+      T.perm += row.perm; T.unauth += row.unauth;
+      T.lateCases += row.lateDays; T.lateMins += row.lateMins;
+      if(row.lateDays>0) T.withLate++;
+      if(row.lateDays===0 && row.unauth===0) T.disciplined++;
+    }
+  });
+  T.rate = T.required>0 ? (T.regular/T.required)*100 : null;
+  return T;
+}
+// الموظف المثالي: لازم يكون مقاس (أيام عمل كفاية) + مفيش تأخير ولا غياب بدون إذن ولا انصراف ناقص
+// الترتيب: أكتر أيام حضور فعلي ← أقل غياب بإذن ← (لو لسه متساويين = تعادل معلن)
+function erPickEmployeeOfMonth(att){
+  if(!att || !att.hasRecords) return {state:'none', reason:'لا توجد سجلات حضور'};
+  const rows = att.rows.filter(r=>!r.exempt && r.required>0);
+  if(!rows.length) return {state:'none', reason:'لا توجد أيام عمل مسجلة'};
+  const maxReq = Math.max.apply(null, rows.map(r=>r.required));
+  const minDays = Math.max(3, Math.ceil(maxReq*0.5));
+  const elig = rows.filter(r=>r.required>=minDays && r.lateDays===0 && r.unauth===0 && r.missingOut===0 && r.regular===r.present);
+  if(!elig.length) return {state:'none', reason:'لا يوجد موظف مستوفٍ للمعايير', minDays:minDays};
+  elig.sort((a,b)=> (b.present-a.present) || (a.perm-b.perm));
+  const top = elig[0];
+  const tied = elig.filter(r=>r.present===top.present && r.perm===top.perm);
+  return {state:tied.length>1?'tie':'one', top:top, tied:tied, minDays:minDays, rate:(top.regular/top.required)*100};
+}
+function erPendingIssues(y,m){
+  const mm = String(m).padStart(2,'0');
+  return (DB.issues||[]).filter(i=>i && i.dt && String(i.dt).startsWith(y+'-'+mm) && (i.status==='بانتظار المراجعة'||i.status==='pending')).length;
+}
+function erAttSource(y,m){
+  const arc = erGetArchive(y,m);
+  if(arc && arc.snapshot && Array.isArray(arc.snapshot.att)){
+    const emps = (Array.isArray(arc.snapshot.emp)?arc.snapshot.emp:DB.emp).filter(e=>e.st==='نشط');
+    return {emps:emps, att:arc.snapshot.att};
+  }
+  return {emps:DB.emp.filter(e=>e.st==='نشط'), att:DB.att};
+}
+
+// ---------- المصروفات ----------
+function erExpensesOf(netFactory, rent, br){
+  const comps = [
+    {k:'factory', label:'مرتبات المصنع (صافي)', v:netFactory},
+    {k:'main',    label:'مرتبات الفرع الرئيسي', v:br.main},
+    {k:'shub',    label:'مرتبات فرع شبراملس',   v:br.shub},
+    {k:'rent',    label:'الإيجارات الشهرية',     v:rent}
+  ];
+  const known = comps.filter(c=>erIsNum(c.v));
+  return {comps:comps, total:known.length ? known.reduce((s,c)=>s+Number(c.v),0) : null, missing:comps.filter(c=>!erIsNum(c.v)).map(c=>c.label)};
+}
+
+// ---------- تحليل أسباب تغير صافي المرتبات ----------
+function erAnalyzeNet(cur, prv){
+  if(!cur || !prv) return null;
+  const dNet = cur.net - prv.net;
+  const items = [
+    {k:'basic', label:'الرواتب الأساسية', own:cur.basic-prv.basic, impact:cur.basic-prv.basic,  up:'ارتفاع الرواتب الأساسية',  down:'انخفاض الرواتب الأساسية'},
+    {k:'allow', label:'البدلات',          own:cur.allow-prv.allow, impact:cur.allow-prv.allow,  up:'ارتفاع قيمة البدلات',       down:'انخفاض قيمة البدلات'},
+    {k:'ot',    label:'الأوفرتايم',       own:cur.ot-prv.ot,       impact:cur.ot-prv.ot,        up:'ارتفاع قيمة الأوفرتايم',    down:'انخفاض قيمة الأوفرتايم'},
+    {k:'ded',   label:'الاستقطاعات',      own:cur.deduct-prv.deduct, impact:-(cur.deduct-prv.deduct), up:'زيادة إجمالي الاستقطاعات', down:'انخفاض إجمالي الاستقطاعات'}
+  ];
+  const explained = items.reduce((s,i)=>s+i.impact,0);
+  const residual = dNet - explained;
+  items.push({k:'resid', label:'فروق التقريب وحد الصفر', own:residual, impact:residual, up:'فروق التقريب', down:'فروق التقريب'});
+  items.forEach(i=>{ i.share = Math.abs(dNet)>0.5 ? (i.impact/dNet)*100 : null; });
+  const main = items.filter(i=>i.k!=='resid' && Math.abs(i.impact)>=1).sort((a,b)=>Math.abs(b.impact)-Math.abs(a.impact));
+  return {dNet:dNet, items:items, main:main, countCur:cur.paid, countPrev:prv.paid, countDiff:cur.paid-prv.paid};
+}
+function erCauseText(an, netChg){
+  if(!an || netChg.state==='nodata') return 'لا تتوفر بيانات كافية لتحديد السبب';
+  if(Math.abs(an.dNet)<0.5) return 'لم يتغير صافي المرتبات';
+  if(!an.main.length) return 'لا تتوفر بيانات كافية لتحديد السبب';
+  const parts = an.main.slice(0,3).map(i=> (i.own>0?i.up:i.down)+' ('+(i.impact>0?'+':'−')+erF(Math.abs(i.impact))+' ج.م على الصافي)');
+  return parts.join('، ');
+}
+
+// ================================================================
+// تجميع نسخة واحدة متسقة من البيانات — الداشبورد والطباعة وواتساب بيقروا منها هي بس
+// ================================================================
+function erBuild(){
+  const y = Number(DB.cycle.y), m = Number(DB.cycle.m);
+  const pv = erPrevYM(y,m);
+  const _now = new Date(), _dim = new Date(y,m,0).getDate();
+  const D = {partial:(_now.getFullYear()===y && _now.getMonth()+1===m && _now.getDate()<_dim) ? {day:_now.getDate(), dim:_dim} : null, y:y, m:m, py:pv.y, pm:pv.m, label:MAR[m-1]+' '+y, plabel:MAR[pv.m-1]+' '+pv.y, generatedAt:new Date(), company:ER_COMPANY, notes:[], recs:[]};
+
+  // --- المرتبات ---
+  const cp = erPayrollFor(y,m), pp = erPayrollFor(pv.y,pv.m);
+  const ca = erAggSlips(cp.slips), pa = erAggSlips(pp.slips);
+  const cb = erBranchFor(y,m), pb = erBranchFor(pv.y,pv.m);
+  D.pay = {cur:ca, prv:pa, curSrc:cp, prvSrc:pp};
+  D.branch = {cur:cb, prv:pb};
+  const rowsDef = [
+    {k:'net',    label:'صافي مرتبات المصنع', good:'neutral'},
+    {k:'basic',  label:'الرواتب الأساسية',   good:'neutral'},
+    {k:'allow',  label:'البدلات',            good:'neutral'},
+    {k:'ot',     label:'الأوفرتايم',         good:'down'},
+    {k:'deduct', label:'الاستقطاعات',        good:'neutral'},
+    {k:'ins',    label:'التأمينات المسجلة',  good:'neutral'}
+  ];
+  D.payRows = rowsDef.map(r=>({label:r.label, good:r.good, chg:erChg(ca?ca[r.k]:null, pa?pa[r.k]:null)}));
+  D.otherAdd = 'لا يوجد بند «إضافات أخرى» مسجل في كشف المرتبات (الإجمالي = الأساسي + البدلات + الأوفرتايم)';
+  D.payAll = (function(){
+    const f = ca ? ca.net : null;
+    const known = [f, cb.main, cb.shub].filter(erIsNum);
+    const kp = [pa?pa.net:null, pb.main, pb.shub].filter(erIsNum);
+    return {cur: known.length ? known.reduce((s,v)=>s+Number(v),0) : null, prv: kp.length ? kp.reduce((s,v)=>s+Number(v),0) : null,
+            partial: !(erIsNum(f)&&erIsNum(cb.main)&&erIsNum(cb.shub))};
+  })();
+
+  // --- الإيجارات / المصروفات ---
+  D.rent = {cur:erRentFor(y,m), prv:erRentFor(pv.y,pv.m)};
+  D.otherExp = {cur:erSumKnown([cb.main,cb.shub]), prv:erSumKnown([pb.main,pb.shub])};
+  D.exp = {cur:erExpensesOf(ca?ca.net:null, D.rent.cur.total, cb), prv:erExpensesOf(pa?pa.net:null, D.rent.prv.total, pb)};
+  (function(){
+    const e = D.exp;
+    const common = e.cur.comps.filter((c,i)=>erIsNum(c.v)&&erIsNum(e.prv.comps[i].v));
+    e.commonCur = common.reduce((s,c)=>s+Number(c.v),0);
+    e.commonPrv = common.reduce((s,c)=>s+Number(e.prv.comps[e.cur.comps.indexOf(c)].v),0);
+    e.commonLabels = common.map(c=>c.label);
+    e.sameBasis = e.cur.missing.length===0 && e.prv.missing.length===0;
+    e.chg = common.length ? erChg(e.commonCur, e.commonPrv) : erChg(null,null);
+    e.rentChg = erChg(D.rent.cur.total, D.rent.prv.total);
+  })();
+  D.analysis = erAnalyzeNet(ca, pa);
+  D.netChg = erChg(ca?ca.net:null, pa?pa.net:null);
+  D.cause = erCauseText(D.analysis, D.netChg);
+
+  // --- الحضور ---
+  const cs = erAttSource(y,m), ps = erAttSource(pv.y,pv.m);
+  D.att = {cur:erAttendanceFor(y,m,cs.emps,cs.att), prv:erAttendanceFor(pv.y,pv.m,ps.emps,ps.att)};
+  const A = D.att.cur, B = D.att.prv;
+  D.attChg = {
+    rate: erChg(A.rate, B.hasRecords?B.rate:null),
+    late: erChg(A.lateCases, B.hasRecords?B.lateCases:null),
+    perm: erChg(A.perm, B.hasRecords?B.perm:null),
+    unauth: erChg(A.unauth, B.hasRecords?B.unauth:null),
+    otHrs: erChg(ca?ca.otHrs:null, pa?pa.otHrs:null),
+    otCost: erChg(ca?ca.ot:null, pa?pa.ot:null)
+  };
+  D.eom = erPickEmployeeOfMonth(A);
+  D.pending = erPendingIssues(y,m);
+
+  // --- السلف / المسحوبات / الصدقات ---
+  D.adv = {cur:erAdvFor(y,m,ca), prv:erAdvFor(pv.y,pv.m,pa)};
+  D.advChg = {fresh:erChg(D.adv.cur.newTotal, D.adv.prv.newTotal), inst:erChg(D.adv.cur.instDue, D.adv.prv.instDue)};
+  D.draws = {cur:erDrawsFor(y,m), prv:erDrawsFor(pv.y,pv.m)};
+  D.drawsChg = erChg(D.draws.cur.total, D.draws.prv.total);
+  D.chr = {cur:erCharityFor(y,m), prv:erCharityFor(pv.y,pv.m)};
+  D.chrChg = erChg(D.chr.cur.total, D.chr.prv.total);
+
+  // --- اتجاه آخر 6 شهور (المتاح فقط) ---
+  D.trend = [];
+  for(let i=5;i>=0;i--){
+    let ty = y, tm = m-i; while(tm<=0){ tm+=12; ty--; }
+    let val = null, src = null;
+    if(i===0){ val = D.exp.cur.total; src='live'; }
+    else{
+      const arc = erGetArchive(ty,tm);
+      if(arc && arc.totals && erIsNum(arc.totals.net)){
+        const r = erRentFor(ty,tm), b = erBranchFor(ty,tm);
+        const known = [arc.totals.net, r.total, b.main, b.shub].filter(erIsNum);
+        val = known.reduce((s,v)=>s+Number(v),0); src='archive';
+      }
+    }
+    D.trend.push({label:MAR[tm-1].slice(0,5)+' '+String(ty).slice(2), full:MAR[tm-1]+' '+ty, value:val, src:src});
+  }
+
+  erBuildNotes(D);
+  erBuildRecs(D);
+  erBuildSummary(D);
+  erBuildKpis(D);
+  return D;
+}
+
+// ---------- ملاحظات جودة البيانات (بتظهر في التقرير نفسه) ----------
+function erBuildNotes(D){
+  const n = D.notes, ca = D.pay.cur, A = D.att.cur;
+  if(D.partial) n.push('الشهر لم ينتهِ بعد (اليوم '+erF(D.partial.day)+' من '+erF(D.partial.dim)+') — الأرقام تخص الأيام المسجلة حتى الآن فقط، ومقارنتها بالشهر السابق الكامل قد تُظهر انخفاضًا ظاهريًا في الأوفرتايم والتأخير والمصروفات المتغيرة.');
+  if(D.pay.curSrc.src==='none') n.push('تعذّر احتساب كشف مرتبات الشهر الحالي.');
+  if(D.pay.prvSrc.src==='recalc') n.push('الشهر السابق ('+D.plabel+') غير مؤرشف؛ تم احتساب أرقامه بإعادة احتساب سجلاته بالقواعد وبيانات الموظفين الحالية (السلف تُحتسب بحالتها الحالية). لأرقام مجمّدة أرشف الشهر من تاب الأرشيف.');
+  if(D.pay.prvSrc.src==='none') n.push('لا تتوفر بيانات مرتبات للشهر السابق ('+D.plabel+') — لا توجد سجلات حضور ولا أرشيف له.');
+  if(!D.branch.cur.entered) n.push('لم تُدخل مرتبات الفرع الرئيسي وفرع شبراملس لشهر '+D.label+' بعد — الإجمالي المعروض يشمل المتاح فقط.');
+  else{
+    if(!erIsNum(D.branch.cur.main)) n.push('لم تُدخل مرتبات الفرع الرئيسي لشهر '+D.label+'.');
+    if(!erIsNum(D.branch.cur.shub)) n.push('لم تُدخل مرتبات فرع شبراملس لشهر '+D.label+'.');
+  }
+  if(!D.branch.prv.entered) n.push('لم تُدخل مرتبات الفرعين للشهر السابق ('+D.plabel+') — مقارنة المصروفات تتم على المكونات المتاحة في الشهرين فقط.');
+  if(D.rent.prv.src==='history') n.push('إيجارات الشهر السابق مأخوذة من سجل تغيّر قيمة العقود النشطة حاليًا (الشهر غير مؤرشف).');
+  if(ca && ca.count-ca.paid>0) n.push(erF(ca.count-ca.paid)+' موظف نشط بدون مرتب أساسي/بدلات مسجلة — غير محتسبين في عدد الموظفين المستحقين.');
+  if(D.pending>0) n.push(erF(D.pending)+' حالة حضور بانتظار مراجعة المحاسب في '+D.label+' — أرقام الحضور والمرتبات قد تتغير بعد اعتماد قراراتها.');
+  if(A.missingOut>0) n.push(erF(A.missingOut)+' يوم حضور بدون تسجيل انصراف (باستثناء اليوم الحالي).');
+  if(!A.hasRecords) n.push('لا توجد سجلات حضور لشهر '+D.label+'.');
+  D.notes = n;
+}
+
+// ---------- التوصيات التلقائية (كل توصية لها شرط حقيقي من الأرقام) ----------
+function erBuildRecs(D){
+  const R = D.recs, A = D.att.cur, B = D.att.prv, ca = D.pay.cur, pa = D.pay.prv, ch = D.attChg;
+  const add = (type,text)=>R.push({type:type,text:text});
+  // الأوفرتايم
+  if(ch.otCost.state==='ok' && ch.otCost.pct>=10 && ch.otCost.diff>0)
+    add('warn','ارتفعت تكلفة الأوفرتايم بنسبة '+erP(ch.otCost.pct)+' (+'+erF(ch.otCost.diff)+' ج.م) — يوصى بمراجعة توزيع ساعات العمل.');
+  else if(ch.otCost.state==='ok' && ch.otCost.pct<=-10 && !D.partial)
+    add('good','انخفضت تكلفة الأوفرتايم بنسبة '+erP(Math.abs(ch.otCost.pct)).replace('+','')+' ('+erF(Math.abs(ch.otCost.diff))+' ج.م).');
+  else if(ch.otCost.state==='zeroprev' && ch.otCost.cur>0)
+    add('info','تكلفة الأوفرتايم '+erF(ch.otCost.cur)+' ج.م مقابل صفر في الشهر السابق — يوصى بمتابعة مبررات الأوفرتايم.');
+  // التأخير
+  if(A.hasRecords){
+    if(ch.late.state==='ok' && ch.late.diff>0)
+      add('warn','زادت حالات التأخير إلى '+erF(A.lateCases)+' حالة (بزيادة '+erF(ch.late.diff)+' عن الشهر السابق) — يوصى بمتابعة الانضباط في الشهر القادم.');
+    else if(ch.late.state==='ok' && ch.late.diff<0 && !D.partial)
+      add('good','تراجعت حالات التأخير من '+erF(ch.late.prev)+' إلى '+erF(ch.late.cur)+' حالة.');
+    else if(ch.late.state==='zeroprev' && ch.late.cur>0)
+      add('warn','سُجلت '+erF(A.lateCases)+' حالة تأخير لدى '+erF(A.withLate)+' موظف مقابل صفر في الشهر السابق — يوصى بالمتابعة.');
+    else if(ch.late.state==='nodata' && A.lateCases>0)
+      add('info','سُجلت '+erF(A.lateCases)+' حالة تأخير لدى '+erF(A.withLate)+' موظف (لا تتوفر بيانات الشهر السابق للمقارنة).');
+    if(ch.unauth.state==='ok' && ch.unauth.diff>0)
+      add('warn','زاد الغياب بدون إذن من '+erF(ch.unauth.prev)+' إلى '+erF(ch.unauth.cur)+' يوم.');
+    else if(A.unauth>0 && ch.unauth.state!=='ok')
+      add('info','سُجل '+erF(A.unauth)+' يوم غياب بدون إذن في '+D.label+'.');
+    if(ch.rate.state==='ok' && ch.rate.diff>=1) add('good','تحسّن معدل الانضباط إلى '+erH(A.rate)+'% مقابل '+erH(ch.rate.prev)+'% في الشهر السابق.');
+    else if(ch.rate.state==='ok' && ch.rate.diff<=-1) add('warn','تراجع معدل الانضباط إلى '+erH(A.rate)+'% مقابل '+erH(ch.rate.prev)+'% — يوصى بمراجعة أسباب التراجع.');
+  }
+  // السلف
+  const af = D.advChg.fresh;
+  if(af.state==='ok' && af.diff>0) add('warn','زادت السلف الجديدة بمقدار '+erF(af.diff)+' ج.م ('+erP(af.pct)+') — يوصى بمراجعة اتجاه السلف ومدى تكرارها.');
+  else if(af.state==='zeroprev' && af.cur>0) add('info','سُجلت سلف جديدة بقيمة '+erF(af.cur)+' ج.م ('+erF(D.adv.cur.newCount)+' سلفة) مقابل صفر في الشهر السابق.');
+  // الإيجارات
+  const rc = D.exp.rentChg;
+  if(rc.state==='ok' && Math.abs(rc.diff)>=1){
+    const sameCount = D.rent.cur.count===D.rent.prv.count;
+    add(rc.diff>0?'warn':'good', (rc.diff>0?'ارتفع':'انخفض')+' إجمالي الإيجارات بمقدار '+erF(Math.abs(rc.diff))+' ج.م ('+erP(rc.pct)+') — '+(sameCount?'نتيجة تغيّر قيم العقود (عدد العقود ثابت: '+erF(D.rent.cur.count)+').':'نتيجة تغيّر عدد العقود من '+erF(D.rent.prv.count)+' إلى '+erF(D.rent.cur.count)+' وقيمها.'));
+  }
+  // المصروفات الكلية
+  const ec = D.exp.chg;
+  if(ec.state==='ok' && ec.diff<0 && !D.partial){
+    const down = D.exp.cur.comps.map((c,i)=>({l:c.label,d:erIsNum(c.v)&&erIsNum(D.exp.prv.comps[i].v)?Number(c.v)-Number(D.exp.prv.comps[i].v):null})).filter(x=>x.d!==null&&x.d<-0.5).sort((a,b)=>a.d-b.d);
+    if(down.length) add('good','انخفضت المصروفات بمقدار '+erF(Math.abs(ec.diff))+' ج.م؛ ساهم في الانخفاض حسابيًا: '+down.slice(0,3).map(x=>x.l+' ('+erF(Math.abs(x.d))+' ج.م)').join('، ')+'.');
+  } else if(ec.state==='ok' && ec.diff>0 && D.analysis){
+    add('info','ارتفعت المصروفات بمقدار '+erF(ec.diff)+' ج.م ('+erP(ec.pct)+') على المكونات المتاحة في الشهرين.');
+  }
+  // المسحوبات
+  if(D.drawsChg.state==='ok' && D.drawsChg.diff>0) add('info','زادت المسحوبات المسجلة بمقدار '+erF(D.drawsChg.diff)+' ج.م ('+erP(D.drawsChg.pct)+').');
+  // مراجعات معلقة / نواقص
+  if(D.pending>0) add('warn','يوجد '+erF(D.pending)+' حالة حضور بانتظار مراجعة المحاسب — يوصى باعتمادها قبل تسليم التقرير النهائي.');
+  if(A.missingOut>0) add('warn','يوجد '+erF(A.missingOut)+' يوم بدون تسجيل انصراف — يوصى بمراجعتها لضمان دقة الأوفرتايم.');
+  if(!D.branch.cur.entered || !erIsNum(D.branch.cur.main) || !erIsNum(D.branch.cur.shub))
+    add('warn','مرتبات أحد الفرعين غير مُدخلة لشهر '+D.label+' — أكمل إدخالها من تاب «مصروفات الشهر» ليكتمل إجمالي المصروفات.');
+  if(!R.length) R.push({type:'info', text:'لا توجد مؤشرات تستدعي توصية خاصة هذا الشهر بناءً على البيانات المتاحة.'});
+}
+
+// ---------- الملخص التنفيذي (ديناميكي بالكامل) ----------
+function erBuildSummary(D){
+  const S = [];
+  const e = D.exp, A = D.att.cur, ca = D.pay.cur;
+  // 1) المصروفات
+  let p1 = 'خلال شهر '+D.label+'، سجّلت مصروفات المصنع والفروع والإيجار إجمالي '+(erIsNum(e.cur.total)?erF(e.cur.total)+' ج.م':'غير متاح')+'.';
+  if(e.cur.missing.length) p1 += ' (الإجمالي لا يشمل: '+e.cur.missing.join('، ')+' لعدم توفر بياناتها).';
+  if(e.chg.state==='ok'){
+    p1 += ' وبمقارنة '+(e.sameBasis?'الإجمالي':'المكونات المتاحة في الشهرين')+' بشهر '+D.plabel+' ('+erF(e.commonPrv)+' ج.م مقابل '+erF(e.commonCur)+' ج.م)، بلغت نسبة التغير '+erP(e.chg.pct)+'.';
+  } else if(e.chg.state==='zeroprev') p1 += ' والمكونات المتاحة للمقارنة في '+D.plabel+' ('+(e.commonLabels.join('، ')||'—')+') بقيمة صفر؛ غير قابل لحساب نسبة التغير.';
+  else p1 += ' لا تتوفر بيانات كافية للمقارنة بالشهر السابق.';
+  S.push(p1);
+  // 2) المرتبات
+  if(ca){
+    let p2 = 'بلغ صافي مرتبات المصنع '+erF(ca.net)+' ج.م لعدد '+erF(ca.paid)+' موظف مستحق';
+    if(D.netChg.state==='ok'){
+      p2 += '، '+(D.netChg.diff>=0?'بزيادة ':'بانخفاض ')+'قدرها '+erP(Math.abs(D.netChg.pct)).replace('+','')+' عن '+D.plabel+' ('+erF(D.netChg.prev)+' ج.م). '+(Math.abs(D.analysis.dNet)<0.5?'':'ويرجع ذلك حسابيًا إلى: '+D.cause+'.');
+    } else if(D.netChg.state==='zeroprev') p2 += '، والشهر السابق بقيمة صفر (غير قابل لحساب نسبة التغير).';
+    else p2 += '. لا تتوفر بيانات كافية لمقارنة المرتبات بالشهر السابق.';
+    S.push(p2);
+  }
+  // 3) الموارد البشرية
+  if(A.hasRecords){
+    let p3 = 'على مستوى الموارد البشرية، بلغ معدل الانضباط '+(erIsNum(A.rate)?erH(A.rate)+'%':'غير متاح')+' (أيام الحضور المنتظم من أيام العمل المسجلة)، وسُجلت '+erF(A.lateCases)+' حالة تأخير لدى '+erF(A.withLate)+' موظف، و'+erF(A.perm)+' يوم غياب بإذن و'+erF(A.unauth)+' يوم غياب بدون إذن، وبلغ الأوفرتايم المحتسب '+erH(ca?ca.otHrs:null)+' ساعة بقيمة '+erF(ca?ca.ot:null)+' ج.م.';
+    S.push(p3);
+  } else S.push('لا توجد سجلات حضور لشهر '+D.label+'؛ لذلك لا تتوفر مؤشرات الانضباط.');
+  // 4) التوصية
+  const key = D.recs.filter(r=>r.type==='warn').slice(0,1).concat(D.recs.filter(r=>r.type==='good').slice(0,1));
+  if(key.length) S.push('ويوصي التقرير بما يلي: '+key.map(r=>r.text).join(' '));
+  if(D.partial) S.push('تنبيه: شهر '+D.label+' لم ينتهِ بعد (اليوم '+erF(D.partial.day)+' من '+erF(D.partial.dim)+')، فالأرقام جزئية وأي مقارنة بالشهر السابق الكامل تأخذ ذلك في الاعتبار.');
+  D.summary = S;
+}
+
+// ---------- مؤشرات البطاقات (نفس القيم في الداشبورد والطباعة وواتساب) ----------
+function erBuildKpis(D){
+  const ca = D.pay.cur, A = D.att.cur, e = D.exp;
+  D.kpis = [
+    {k:'exp',   icon:'account_balance_wallet', label:'إجمالي المصروفات المسجلة', val:e.cur.total, kind:'money', chg:e.chg, good:'down', sub:e.cur.missing.length?('ناقص: '+e.cur.missing.join('، ')):'مصنع + فروع + إيجار'},
+    {k:'net',   icon:'payments',               label:'صافي مرتبات المصنع',      val:ca?ca.net:null, kind:'money', chg:D.netChg, good:'neutral', sub:ca?(erF(ca.paid)+' موظف مستحق'):''},
+    {k:'payall',icon:'groups',                 label:'إجمالي المرتبات (كل الجهات)', val:D.payAll.cur, kind:'money', chg:erChg(D.payAll.cur, D.payAll.prv), good:'neutral', sub:D.payAll.partial?'يشمل المُدخل فقط':'مصنع + فرعين'},
+    {k:'rent',  icon:'apartment',              label:'إجمالي الإيجارات',        val:D.rent.cur.total, kind:'money', chg:e.rentChg, good:'down', sub:erF(D.rent.cur.count)+' عقد نشط'},
+    {k:'rate',  icon:'verified',               label:'معدل الانضباط',            val:A.hasRecords?A.rate:null, kind:'pct', chg:D.attChg.rate, good:'up', sub:'أيام منتظمة ÷ أيام العمل'},
+    {k:'late',  icon:'schedule',               label:'حالات التأخير',            val:A.hasRecords?A.lateCases:null, kind:'int', chg:D.attChg.late, good:'down', sub:erF(A.withLate)+' موظف متأخر'},
+    {k:'abs',   icon:'event_busy',             label:'حالات الغياب',             val:A.hasRecords?(A.perm+A.unauth):null, kind:'int', chg:erChg(A.hasRecords?(A.perm+A.unauth):null, D.att.prv.hasRecords?(D.att.prv.perm+D.att.prv.unauth):null), good:'down', sub:'بإذن '+erF(A.perm)+' / بدون إذن '+erF(A.unauth)},
+    {k:'ot',    icon:'more_time',              label:'ساعات الأوفرتايم',         val:ca?ca.otHrs:null, kind:'hrs', chg:D.attChg.otHrs, good:'down', sub:'قيمتها '+erF(ca?ca.ot:null)+' ج.م'},
+    {k:'adv',   icon:'credit_card',            label:'السلف الجديدة',            val:D.adv.cur.newTotal, kind:'money', chg:D.advChg.fresh, good:'down', sub:erF(D.adv.cur.newCount)+' سلفة'},
+    {k:'draw',  icon:'request_quote',          label:'المسحوبات',                val:D.draws.cur.total, kind:'money', chg:D.drawsChg, good:'down', sub:erF(D.draws.cur.count)+' عملية'},
+    {k:'chr',   icon:'volunteer_activism',     label:'الصدقات',                  val:D.chr.cur.total, kind:'money', chg:D.chrChg, good:'neutral', sub:erF(D.chr.cur.count)+' حالة'}
+  ];
+}
+function erKpiText(k){
+  if(!erIsNum(k.val)) return '—';
+  if(k.kind==='money') return erF(k.val)+' ج.م';
+  if(k.kind==='pct') return erH(k.val)+'%';
+  if(k.kind==='hrs') return erH(k.val)+' ساعة';
+  return erF(k.val);
+}
+
+// ================================================================
+// الرسوم البيانية — SVG خفيفة (بدون أي مكتبة خارجية) مع Tooltips
+// ================================================================
+const ER_C = {navy:'#0f2057', blue:'#1e3a8a', teal:'#0ea5a0', amber:'#d97706', red:'#e03131', green:'#16a34a', gray:'#94a3b8', prev:'#a5b4d4'};
+function erNoData(msg){ return '<div style="text-align:center;padding:34px 10px;color:#94a3b8;font-size:12.5px;font-weight:700">'+(msg||'لا توجد بيانات')+'</div>'; }
+function erCompact(v){
+  v = Number(v);
+  if(Math.abs(v)>=1000000) return (v/1000000).toLocaleString('ar-EG',{maximumFractionDigits:2})+' م';
+  if(Math.abs(v)>=1000) return (v/1000).toLocaleString('ar-EG',{maximumFractionDigits:1})+' ألف';
+  return v.toLocaleString('ar-EG',{maximumFractionDigits:0});
+}
+function erBarsSvg(cats, series, fmt){
+  fmt = fmt || erMoney;
+  const vals = series.reduce((a,s)=>a.concat(s.vals),[]).filter(erIsNum).map(Number);
+  if(!vals.length) return erNoData();
+  const W=520,H=230,padL=8,padR=8,padT=22,padB=44, max=Math.max.apply(null,vals.concat([1]));
+  const gw=(W-padL-padR)/cats.length, wide=cats.length<=2, gap=wide?18:6, bw=Math.min(wide?90:44,(gw*0.72)/series.length);
+  let g='';
+  cats.forEach((c,ci)=>{
+    const total = bw*series.length+gap*(series.length-1);
+    const x0 = padL+ci*gw+(gw-total)/2;
+    series.forEach((s,si)=>{
+      const v = s.vals[ci], x = x0+si*(bw+gap);
+      if(!erIsNum(v)){
+        g += '<text x="'+(x+bw/2)+'" y="'+(H-padB-6)+'" text-anchor="middle" font-size="13" fill="#94a3b8">غير متاح</text>';
+        return;
+      }
+      const h = Math.max(1,(Number(v)/max)*(H-padT-padB)), y = H-padB-h;
+      g += '<g><rect class="er-bar" x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+h.toFixed(1)+'" rx="4" fill="'+s.color+'" style="animation-delay:'+(ci*80+si*60)+'ms"><title>'+erEsc(s.name+' — '+c+': '+fmt(v))+'</title></rect>'
+        + '<text x="'+(x+bw/2).toFixed(1)+'" y="'+(y-5).toFixed(1)+'" text-anchor="middle" font-size="15" font-weight="800" fill="'+ER_C.navy+'">'+erCompact(v)+'</text></g>';
+    });
+    g += '<text x="'+(padL+ci*gw+gw/2).toFixed(1)+'" y="'+(H-padB+18)+'" text-anchor="middle" font-size="15" font-weight="700" fill="#334155">'+erEsc(c)+'</text>';
+  });
+  const base = '<line x1="'+padL+'" y1="'+(H-padB)+'" x2="'+(W-padR)+'" y2="'+(H-padB)+'" stroke="#dbe3f3"/>';
+  const legend = '<div style="display:flex;gap:14px;justify-content:center;margin-top:6px;font-size:11.5px;font-weight:700;color:#475569">'+series.map(s=>'<span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:'+s.color+';margin-left:5px;vertical-align:-1px"></span>'+erEsc(s.name)+'</span>').join('')+'</div>';
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;display:block" role="img">'+base+g+'</svg>'+legend;
+}
+function erDonutSvg(items){
+  const list = items.filter(i=>erIsNum(i.value)&&Number(i.value)>0);
+  const total = list.reduce((s,i)=>s+Number(i.value),0);
+  if(!list.length||total<=0) return erNoData();
+  const R=70, C=2*Math.PI*R; let off=0, arcs='';
+  list.forEach((i,idx)=>{
+    const frac = Number(i.value)/total, len = frac*C;
+    arcs += '<circle class="er-arc" cx="110" cy="110" r="'+R+'" fill="none" stroke="'+i.color+'" stroke-width="34" stroke-dasharray="'+len.toFixed(2)+' '+(C-len).toFixed(2)+'" stroke-dashoffset="'+(-off).toFixed(2)+'" transform="rotate(-90 110 110)" style="animation-delay:'+(idx*120)+'ms"><title>'+erEsc(i.label+': '+erMoney(i.value)+' ('+(frac*100).toLocaleString('ar-EG',{maximumFractionDigits:1})+'%)')+'</title></circle>';
+    off += len;
+  });
+  const legend = list.map(i=>'<div style="display:flex;align-items:center;gap:7px;font-size:12px;margin:3px 0"><span style="width:11px;height:11px;border-radius:3px;background:'+i.color+';flex-shrink:0"></span><span style="flex:1;font-weight:700;color:#334155">'+erEsc(i.label)+'</span><span style="font-weight:800;color:'+ER_C.navy+'">'+(Number(i.value)/total*100).toLocaleString('ar-EG',{maximumFractionDigits:1})+'%</span></div>').join('');
+  return '<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center"><svg viewBox="0 0 220 220" style="width:190px;height:190px;flex-shrink:0" role="img">'+arcs+'<text x="110" y="106" text-anchor="middle" font-size="11" fill="#64748b" font-weight="700">الإجمالي</text><text x="110" y="126" text-anchor="middle" font-size="14" fill="'+ER_C.navy+'" font-weight="800">'+erCompact(total)+'</text></svg><div style="flex:1;min-width:170px">'+legend+'</div></div>';
+}
+function erLineSvg(points){
+  const pts = points.map((p,i)=>({i:i,label:p.label,full:p.full,v:erIsNum(p.value)?Number(p.value):null}));
+  const real = pts.filter(p=>p.v!==null);
+  if(real.length<2) return erNoData('لا توجد بيانات تاريخية كافية (الشهور غير المؤرشفة لا تظهر هنا)');
+  const W=520,H=220,padL=14,padR=14,padT=24,padB=36, max=Math.max.apply(null,real.map(p=>p.v).concat([1]));
+  const step=(W-padL-padR)/(pts.length-1), X=i=>padL+i*step, Y=v=>H-padB-(v/max)*(H-padT-padB);
+  const poly = real.map(p=>X(p.i).toFixed(1)+','+Y(p.v).toFixed(1)).join(' ');
+  let g='<polyline class="er-line" points="'+poly+'" fill="none" stroke="'+ER_C.blue+'" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>';
+  pts.forEach(p=>{
+    g += '<text x="'+X(p.i).toFixed(1)+'" y="'+(H-padB+18)+'" text-anchor="middle" font-size="14" font-weight="700" fill="#334155">'+erEsc(p.label)+'</text>';
+    if(p.v!==null) g += '<circle cx="'+X(p.i).toFixed(1)+'" cy="'+Y(p.v).toFixed(1)+'" r="5" fill="#fff" stroke="'+ER_C.navy+'" stroke-width="3"><title>'+erEsc(p.full+': '+erMoney(p.v))+'</title></circle><text x="'+X(p.i).toFixed(1)+'" y="'+(Y(p.v)-10).toFixed(1)+'" text-anchor="middle" font-size="14" font-weight="800" fill="'+ER_C.navy+'">'+erCompact(p.v)+'</text>';
+  });
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;display:block" role="img"><line x1="'+padL+'" y1="'+(H-padB)+'" x2="'+(W-padR)+'" y2="'+(H-padB)+'" stroke="#dbe3f3"/>'+g+'</svg>';
+}
+function erHBars(rows){
+  const max = Math.max.apply(null, rows.map(r=>erNum(r.v)).concat([1]));
+  return rows.map(r=>'<div style="margin:9px 0" title="'+erEsc(r.label+': '+erF(r.v))+'"><div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#334155;margin-bottom:3px"><span>'+erEsc(r.label)+'</span><span style="color:'+r.color+'">'+erF(r.v)+'</span></div><div style="height:9px;background:#eaeffa;border-radius:6px;overflow:hidden"><div class="er-hbar" style="height:100%;border-radius:6px;background:'+r.color+';width:'+(erNum(r.v)/max*100).toFixed(1)+'%"></div></div></div>').join('');
+}
+
+// ================================================================
+// الداشبورد
+// ================================================================
+function erChip(ch, good){
+  const base = 'display:inline-flex;align-items:center;gap:3px;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800;';
+  if(!ch || ch.state==='nodata') return '<span style="'+base+'background:#f1f5f9;color:#94a3b8" title="لا تتوفر بيانات للشهر السابق">لا مقارنة</span>';
+  if(ch.state==='zeroprev'){
+    if(ch.cur===0) return '<span style="'+base+'background:#f1f5f9;color:#64748b">صفر في الشهرين</span>';
+    return '<span style="'+base+'background:#eef2ff;color:#1e3a8a" title="الشهر السابق = صفر؛ غير قابل لحساب نسبة التغير">جديد (السابق صفر)</span>';
+  }
+  const up = ch.diff>0.0001, down = ch.diff<-0.0001;
+  if(!up && !down) return '<span style="'+base+'background:#f1f5f9;color:#64748b">بدون تغير</span>';
+  let tone = 'n';
+  if(good==='down') tone = up?'bad':'good'; else if(good==='up') tone = up?'good':'bad';
+  const col = tone==='good'?['#dcfce7','#16a34a']:tone==='bad'?['#ffe5e5','#e03131']:['#eef2ff','#1e3a8a'];
+  return '<span style="'+base+'background:'+col[0]+';color:'+col[1]+'" title="الشهر السابق: '+erEsc(erF(ch.prev))+'"><span class="ms" style="font-size:14px">'+(up?'arrow_upward':'arrow_downward')+'</span>'+erP(ch.pct)+'</span>';
+}
+function erCardHtml(k){
+  const has = erIsNum(k.val);
+  return '<div class="er-card"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span class="ms" style="color:#1e3a8a;font-size:20px">'+k.icon+'</span><span style="font-size:12px;font-weight:800;color:#475569">'+erEsc(k.label)+'</span></div>'
+   + '<div style="font-size:21px;font-weight:800;color:#0f2057;line-height:1.2"><span class="er-count" data-v="'+(has?Number(k.val):'')+'" data-kind="'+k.kind+'">'+erEsc(erKpiText(k).replace(/ ج\.م$/,'').replace(/ ساعة$/,'').replace(/%$/,''))+'</span>'+(has?'<span style="font-size:12px;font-weight:700;color:#64748b;margin-right:5px">'+(k.kind==='money'?'ج.م':k.kind==='hrs'?'ساعة':k.kind==='pct'?'%':'')+'</span>':'')+'</div>'
+   + '<div style="margin-top:8px">'+erChip(k.chg,k.good)+'</div><div style="font-size:11px;color:#94a3b8;margin-top:6px">'+erEsc(k.sub||'')+'</div></div>';
+}
+function erTable(head, rows, opts){
+  opts = opts||{};
+  return '<div style="overflow-x:auto"><table class="dt" style="width:100%"><thead><tr>'+head.map((h,i)=>'<th style="'+(i>0?'text-align:left':'')+'">'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map((c,i)=>'<td style="'+(i>0?'text-align:left;font-weight:700':'font-weight:700')+'">'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
+}
+function erChgCell(ch){ return erChgText(ch); }
+function erSecTitle(icon,t){ return '<div style="font-size:14px;font-weight:800;color:#0f2057;margin:22px 0 10px;display:flex;align-items:center;gap:8px"><span class="ms" style="color:#1e3a8a">'+icon+'</span>'+t+'</div>'; }
+
+function erDashboardHtml(D){
+  const A = D.att.cur, ca = D.pay.cur, pa = D.pay.prv;
+  const css = '<style>.er-card{background:#fff;border:1px solid #eaeffa;border-radius:14px;padding:15px;box-shadow:0 2px 10px rgba(15,32,87,.05)}'
+    +'.er-box{background:#fff;border:1px solid #eaeffa;border-radius:14px;padding:16px}'
+    +'@keyframes erGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}@keyframes erFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}@keyframes erDash{from{stroke-dasharray:0 999}}@keyframes erWide{from{width:0}}'
+    +'.er-bar{transform-box:fill-box;transform-origin:bottom;animation:erGrow .8s ease both}.er-arc{animation:erFade .9s ease both}.er-hbar{animation:erWide .9s ease both}'
+    +'.er-line{stroke-dasharray:1200;stroke-dashoffset:0;animation:erLn 1.2s ease both}@keyframes erLn{from{stroke-dashoffset:1200}to{stroke-dashoffset:0}}'
+    +'.er-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:12px}.er-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:14px}'
+    +'.er-note{background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:10px 14px;font-size:12.5px;color:#9a3412;margin:6px 0;display:flex;gap:8px;align-items:flex-start}'
+    +'.er-rec{border-radius:12px;padding:10px 14px;font-size:13px;font-weight:700;margin:7px 0;display:flex;gap:9px;align-items:flex-start}'
+    +'.er-chipx{display:inline-block;background:#eef2ff;color:#1e3a8a;border-radius:20px;padding:3px 11px;font-size:11.5px;font-weight:800}'
+    +'.er-box .dt thead th,.er-box .dt td{white-space:normal}@media(max-width:600px){.er-grid{grid-template-columns:repeat(2,1fr)}.er-2{grid-template-columns:1fr!important}}'
+    +'@media(prefers-reduced-motion:reduce){.er-bar,.er-arc,.er-hbar,.er-line{animation:none}}</style>';
+
+  const head = '<div style="background:linear-gradient(135deg,#0b1437,#0f2057 55%,#1e3a8a);border-radius:18px;padding:20px 22px;color:#fff;margin-bottom:16px">'
+    +'<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">'
+    +'<div><div style="font-size:11.5px;color:#9fb4e8;font-weight:700">Executive Monthly Report</div><div style="font-size:19px;font-weight:800;margin:3px 0">التقرير الإداري الشامل</div>'
+    +'<div style="font-size:13px;color:#c7d3f0;font-weight:700">'+erEsc(D.company)+' — عن شهر '+erEsc(D.label)+'</div>'
+    +'<div style="font-size:11px;color:#9fb4e8;margin-top:4px">آخر تحديث: '+D.generatedAt.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})+' — المقارنة مع '+erEsc(D.plabel)+' — قراءة فقط، لا تغيّر أي بيانات</div></div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
+    +'<button class="btn bg" style="background:#fff;color:#0f2057" onclick="erPrint()"><span class="ms ms-sm">print</span>طباعة التقرير الشامل</button>'
+    +'<button class="btn bg" style="background:#25d366;color:#fff;border:none" onclick="erSendWhatsApp()"><span class="ms ms-sm">chat</span>إرسال ملخص للإدارة عبر واتساب</button>'
+    +'<button class="btn bg" style="background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="erRefresh()"><span class="ms ms-sm">refresh</span>تحديث التقرير</button>'
+    +'</div></div></div>';
+
+  const summary = '<div class="er-box" style="margin-bottom:16px;border-right:4px solid #1e3a8a"><div style="font-size:14px;font-weight:800;color:#0f2057;margin-bottom:8px"><span class="ms ms-sm" style="color:#1e3a8a">auto_awesome</span> الملخص التنفيذي</div>'
+    + D.summary.map(p=>'<p style="margin:7px 0;font-size:13.5px;line-height:1.95;color:#1e293b;font-weight:600">'+erEsc(p)+'</p>').join('')+'</div>';
+
+  const notes = D.notes.length ? '<div style="margin-bottom:14px">'+D.notes.map(t=>'<div class="er-note"><span class="ms" style="font-size:18px">info</span><span>'+erEsc(t)+'</span></div>').join('')+'</div>' : '';
+  const cards = '<div class="er-grid" style="margin-bottom:6px">'+D.kpis.map(erCardHtml).join('')+'</div>';
+
+  // ----- جدول المرتبات + التحليل -----
+  const payTbl = erTable(['البيان','الشهر الحالي','السابق','التغير %'], erPayTableRows(D));
+  let ana = erNoData('لا تتوفر بيانات الشهر السابق لتحليل الأسباب');
+  if(D.analysis){
+    const an = D.analysis;
+    ana = '<div style="font-size:13px;line-height:1.9;font-weight:600;color:#1e293b;margin-bottom:10px">'
+      +(D.netChg.state==='ok' ? (D.netChg.diff>=0?'ارتفع':'انخفض')+' صافي المرتبات بنسبة '+erEsc(erP(Math.abs(D.netChg.pct)).replace('+',''))+(Math.abs(an.dNet)<0.5?'.':' ، ويرجع حسابيًا إلى: '+erEsc(D.cause)+'.') : (D.netChg.state==='zeroprev'?'الشهر السابق بقيمة صفر — غير قابل لحساب نسبة التغير.':'لا تتوفر بيانات كافية.'))
+      +'</div>'+erTable(['البند','أثره على صافي المرتبات','نسبة مساهمته في الفرق'], erAnaRows(D))
+      +'<div style="font-size:11.5px;color:#64748b;margin-top:8px">عدد الموظفين المستحقين: '+erF(an.countPrev)+' ← '+erF(an.countCur)+' (التغير في العدد منعكس داخل بنود الأساسي والبدلات). صافي الفرق: '+(an.dNet>0?'+':an.dNet<0?'−':'')+erF(Math.abs(an.dNet))+' ج.م.</div>';
+  }
+  const expTbl = erTable(['البند','الشهر الحالي','السابق','التغير %'], erExpTableRows(D))
+    +'<div style="font-size:11.5px;color:#64748b;margin-top:8px">'+(D.exp.sameBasis?'':'نسبة التغير في الإجمالي محسوبة على المكونات المتاحة في الشهرين فقط ('+erEsc(D.exp.commonLabels.join('، ')||'—')+'). ')+'الصدقات والمسحوبات والسلف تظهر في قسم الالتزامات ولا تُضاف للإجمالي حتى لا يتكرر احتساب مبلغ سبق دخوله في صافي المرتبات.</div>';
+
+  // ----- الرسوم -----
+  const hasPrev = !!pa;
+  const c1 = erBarsSvg(['إجمالي المصروفات'], [{name:D.plabel,color:ER_C.prev,vals:[D.exp.sameBasis?D.exp.prv.total:D.exp.commonPrv]},{name:D.label,color:ER_C.navy,vals:[D.exp.sameBasis?D.exp.cur.total:D.exp.commonCur]}]);
+  const c2 = erDonutSvg(D.exp.cur.comps.map((c,i)=>({label:c.label,value:c.v,color:[ER_C.navy,ER_C.teal,ER_C.amber,ER_C.blue][i]})));
+  const c3 = ca ? erBarsSvg(['الأساسي','البدلات','الأوفرتايم','الاستقطاعات'],[{name:D.plabel,color:ER_C.prev,vals:hasPrev?[pa.basic,pa.allow,pa.ot,pa.deduct]:[null,null,null,null]},{name:D.label,color:ER_C.blue,vals:[ca.basic,ca.allow,ca.ot,ca.deduct]}]) : erNoData();
+  const c4 = A.hasRecords ? erHBars([
+      {label:'أيام حضور منتظم', v:A.regular, color:ER_C.green},
+      {label:'حالات تأخير (جزء من أيام الحضور)', v:A.lateCases, color:ER_C.amber},
+      {label:'غياب بإذن', v:A.perm, color:ER_C.blue},
+      {label:'غياب بدون إذن', v:A.unauth, color:ER_C.red},
+      {label:'إجازات اعتيادية', v:A.annual+A.official, color:ER_C.teal},
+      {label:'راحات أسبوعية وبدل راحة', v:A.rest+A.comp, color:ER_C.gray}
+    ])+'<div style="font-size:11px;color:#94a3b8;margin-top:6px">المؤشرات بوحدة «يوم/حالة»، وليست فئات حصرية: التأخير يحدث داخل أيام الحضور.</div>' : erNoData('لا توجد سجلات حضور');
+  const c5a = ca ? erBarsSvg(['ساعات الأوفرتايم'],[{name:D.plabel,color:ER_C.prev,vals:[hasPrev?pa.otHrs:null]},{name:D.label,color:ER_C.teal,vals:[ca.otHrs]}], v=>erH(v)+' ساعة') : erNoData();
+  const c5b = ca ? erBarsSvg(['تكلفة الأوفرتايم'],[{name:D.plabel,color:ER_C.prev,vals:[hasPrev?pa.ot:null]},{name:D.label,color:ER_C.amber,vals:[ca.ot]}]) : erNoData();
+  const c6 = erLineSvg(D.trend);
+  const box = (t,inner)=>'<div class="er-box"><div style="font-size:13px;font-weight:800;color:#0f2057;margin-bottom:10px">'+t+'</div>'+inner+'</div>';
+  const charts = '<div class="er-2">'+box('مقارنة المصروفات',c1)+box('توزيع المصروفات',c2)+box('تحليل مكونات المرتبات',c3)+box('مؤشرات الانضباط',c4)
+    +'<div class="er-box"><div style="font-size:13px;font-weight:800;color:#0f2057;margin-bottom:10px">الأوفرتايم — ساعات وتكلفة</div><div style="display:grid;grid-template-columns:1fr;gap:8px">'+c5a+c5b+'</div></div>'
+    +box('اتجاه المصروفات — آخر 6 شهور (المتاح)',c6)+'</div>';
+
+  // ----- الموارد البشرية + الموظف المثالي -----
+  const hrTbl = erTable(['المؤشر','الشهر الحالي','السابق','التغير'], erHrRows(D))
+    +'<div style="font-size:11.5px;color:#64748b;margin-top:8px;line-height:1.8"><b>تعريف معدل الانضباط:</b> أيام الحضور المنتظم (بدون تأخير يتجاوز السماح) ÷ أيام العمل المسجلة فعليًا (حضور + غياب بإذن + غياب بدون إذن)، للموظفين غير المستثنين من نظام الحضور ('+erF(A.exempt)+' مستثنى). لا تدخل الراحات والإجازات في المقام، وتُحتسب الحالات المكررة في اليوم الواحد مرة واحدة، وقرارات المحاسب المعتمدة مأخوذة كما هي في سجلات الحضور. المقارنة بين «عدد الموظفين المتأخرين» ('+erF(A.withLate)+') و«عدد مرات التأخير» ('+erF(A.lateCases)+').</div>';
+  let eomHtml;
+  if(D.eom.state==='one'){
+    const t = D.eom.top; eomHtml = '<div style="text-align:center"><div style="font-size:30px">🏆</div><div style="font-size:18px;font-weight:800;color:#0f2057;margin:4px 0">'+erEsc(t.nm)+'</div><div style="font-size:12.5px;color:#64748b;font-weight:700">كود الموظف: '+erEsc(t.cd||'—')+'</div>'
+      +'<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:12px 0"><span class="er-chipx">نسبة الانضباط '+erH(D.eom.rate)+'%</span><span class="er-chipx">أيام الحضور '+erF(t.present)+'</span><span class="er-chipx">مرات التأخير '+erF(t.lateDays)+'</span></div>'
+      +'<div style="font-size:12.5px;color:#334155;line-height:1.8;font-weight:600">'+erEsc('اختير لأنه حضر '+t.present+' يوم بدون أي تأخير أو غياب بدون إذن أو انصراف ناقص'+(t.perm?('، مع '+t.perm+' يوم غياب بإذن فقط'):'')+'.')+'</div></div>';
+  } else if(D.eom.state==='tie'){
+    eomHtml = '<div style="text-align:center"><div style="font-size:30px">🏆</div><div style="font-size:15px;font-weight:800;color:#0f2057;margin:4px 0">تعادل بين '+erF(D.eom.tied.length)+' موظف</div><div style="font-size:12.5px;color:#334155;line-height:1.9;font-weight:700">'+(D.eom.tied.length<=3 ? D.eom.tied.map(t=>erEsc(t.nm)+' ('+erEsc(t.cd||'—')+')').join('<br>') : 'عدد المتعادلين كبير ('+erF(D.eom.tied.length)+') — لا يُعلن فائز منفرد')+'</div><div style="font-size:11.5px;color:#64748b;margin-top:8px">متساوون في: أيام الحضور ('+erF(D.eom.top.present)+') وأيام الغياب بإذن ('+erF(D.eom.top.perm)+') — لا يوجد معيار فصل أدق في بيانات الحضور.</div></div>';
+  } else eomHtml = '<div style="text-align:center;padding:24px 8px;color:#64748b;font-weight:700;font-size:13.5px">لم يتم تحديد موظف مثالي لهذا الشهر<div style="font-size:11.5px;color:#94a3b8;margin-top:6px;font-weight:600">'+erEsc(D.eom.reason||'')+'</div></div>';
+  const eomBox = '<div class="er-box" style="border:2px solid #d4a017;background:linear-gradient(135deg,#fffdf5,#fff)"><div style="font-size:13px;font-weight:800;color:#92400e;margin-bottom:10px">موظف الشهر المثالي — Employee of the Month</div>'+eomHtml
+    +'<div style="font-size:10.5px;color:#94a3b8;margin-top:10px;line-height:1.7">المعايير: عدم وجود تأخير غير مستثنى أو غياب بدون إذن أو انصراف ناقص، بحد أدنى '+erF(D.eom.minDays||3)+' أيام عمل مسجلة؛ والترتيب بأكثر أيام حضور ثم أقل غياب بإذن. الإجازات والراحات لا تُعد مخالفات.</div></div>';
+  const hrSec = '<div class="er-2" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))"><div class="er-box">'+hrTbl+'</div>'+eomBox+'</div>';
+
+  // ----- الالتزامات -----
+  const advTbl = erTable(['البند','الشهر الحالي','السابق','التغير %'], erAdvRowsList(D))
+  +'<div style="font-size:11.5px;color:#64748b;margin-top:6px">النظام لا يسجّل السداد الفعلي لكل شهر على حدة؛ المسدد معروض تراكميًا، والقسط المستحق هو ما خُصم في كشف الشهر. الفصل بين المصروف والمستحق والمسدد والمتبقي محفوظ.</div>';
+  const otherTbl = erTable(['البند','الشهر الحالي','السابق','التغير %'], erOtherRowsList(D))
+  +'<div style="font-size:11.5px;color:#64748b;margin-top:6px">المسحوبات مخصومة أصلًا من صافي المرتبات فلا تُضاف للمصروفات. الإيجارات: النظام لا يسجّل حالة السداد. الصدقات: كما في تاب الصدقات (الحالات المسجلة بالشهر) وحالة الاستلام الفعلية.</div>';
+  const obl = '<div class="er-2" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))"><div class="er-box"><div style="font-size:13px;font-weight:800;color:#0f2057;margin-bottom:8px">السلف والاستقطاعات</div>'+advTbl+'</div><div class="er-box"><div style="font-size:13px;font-weight:800;color:#0f2057;margin-bottom:8px">المسحوبات والإيجارات والصدقات</div>'+otherTbl+'</div></div>';
+
+  const recs = '<div>'+D.recs.map(r=>{ const c = r.type==='warn'?['#fff7ed','#9a3412','warning']:r.type==='good'?['#f0fdf4','#166534','check_circle']:['#eef2ff','#1e3a8a','info']; return '<div class="er-rec" style="background:'+c[0]+';color:'+c[1]+'"><span class="ms" style="font-size:19px">'+c[2]+'</span><span>'+erEsc(r.text)+'</span></div>'; }).join('')+'</div>';
+
+  return css+head+summary+notes+cards
+    +erSecTitle('payments','التقرير المالي ومقارنة المرتبات')+'<div class="er-2" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))"><div class="er-box"><div style="font-size:13px;font-weight:800;color:#0f2057;margin-bottom:8px">مقارنة المرتبات بالشهر السابق</div>'+payTbl+'<div style="font-size:11.5px;color:#64748b;margin-top:8px">مصدر الشهر الحالي: '+erEsc(D.pay.curSrc.label)+' — مصدر الشهر السابق: '+erEsc(D.pay.prvSrc.label)+'. إجمالي الاستحقاقات ('+erF(ca?ca.gross:null)+' ج.م) غير مضاف للمصروفات؛ المحتسب هو الصافي فقط.</div></div><div class="er-box"><div style="font-size:13px;font-weight:800;color:#0f2057;margin-bottom:8px">تحليل أسباب التغير</div>'+ana+'</div></div>'
+    +erSecTitle('account_balance_wallet','المصروفات')+'<div class="er-box">'+expTbl+'</div>'
+    +erSecTitle('insights','لوحة التحليل البياني')+charts
+    +erSecTitle('badge','الحضور والانضباط والموظف المثالي')+hrSec
+    +erSecTitle('receipt_long','الالتزامات')+obl
+    +erSecTitle('lightbulb','التحليل والتوصيات الإدارية')+recs;
+}
+
+// ================================================================
+// صفوف الجداول المشتركة — الداشبورد والطباعة بيقروا منها هي بس (ضمان تطابق الأرقام)
+// ================================================================
+function erSumKnown(arr){
+  const k = arr.filter(erIsNum);
+  return k.length ? k.reduce((s,v)=>s+Number(v),0) : null;
+}
+function erPayTableRows(D){
+  return D.payRows.map(r=>[r.label, erF(r.chg.cur), erF(r.chg.prev), erChgCell(r.chg)])
+    .concat([['إضافات مالية أخرى','—','—','<span style="font-weight:600;color:#94a3b8;font-size:11px">'+erEsc(D.otherAdd)+'</span>']]);
+}
+function erAnaRows(D){
+  return D.analysis.items.map(i=>[erEsc(i.label),(i.impact>0?'+':i.impact<0?'−':'')+erF(Math.abs(i.impact))+' ج.م', i.share===null?'—':erP(i.share).replace('+','')]);
+}
+function erExpTableRows(D){
+  const rows = D.exp.cur.comps.map((c,i)=>[erEsc(c.label), erIsNum(c.v)?erF(c.v):'<span style="color:#94a3b8">غير مُدخل</span>', erIsNum(D.exp.prv.comps[i].v)?erF(D.exp.prv.comps[i].v):'<span style="color:#94a3b8">غير متاح</span>', erChgCell(erChg(c.v, D.exp.prv.comps[i].v))]);
+  rows.push(['<b>إجمالي المصروفات المسجلة</b>', erF(D.exp.cur.total), erF(D.exp.prv.total), erChgCell(erChg(D.exp.cur.total, D.exp.prv.total))]);
+  rows.push(['↳ منها: مصروفات أخرى (مرتبات الفرعين)', erIsNum(D.otherExp.cur)?erF(D.otherExp.cur):'<span style="color:#94a3b8">غير مُدخل</span>', erIsNum(D.otherExp.prv)?erF(D.otherExp.prv):'<span style="color:#94a3b8">غير متاح</span>', erChgCell(erChg(D.otherExp.cur, D.otherExp.prv))]);
+  return rows;
+}
+function erHrRows(D){
+  const A = D.att.cur, B = D.att.prv, ca = D.pay.cur, pa = D.pay.prv, hp = B.hasRecords;
+  return [
+    ['إجمالي الموظفين النشطين', erF(A.totalEmp), erF(B.totalEmp), ''],
+    ['موظفون منضبطون (بدون تأخير أو غياب بدون إذن)', erF(A.disciplined), hp?erF(B.disciplined):'—', ''],
+    ['موظفون لديهم تأخير', erF(A.withLate), hp?erF(B.withLate):'—', ''],
+    ['إجمالي حالات التأخير (مرات)', erF(A.lateCases), hp?erF(B.lateCases):'—', erChgCell(D.attChg.late)],
+    ['إجمالي دقائق التأخير / ساعاته', erF(A.lateMins)+' د / '+erH(A.lateMins/60)+' س', hp?(erF(B.lateMins)+' د'):'—', ''],
+    ['غياب بإذن (أيام)', erF(A.perm), hp?erF(B.perm):'—', erChgCell(D.attChg.perm)],
+    ['غياب بدون إذن (أيام)', erF(A.unauth), hp?erF(B.unauth):'—', erChgCell(D.attChg.unauth)],
+    ['إجازات اعتيادية / رسمية (أيام)', erF(A.annual)+' / '+erF(A.official), hp?(erF(B.annual)+' / '+erF(B.official)):'—', ''],
+    ['راحات أسبوعية (أيام)', erF(A.rest), hp?erF(B.rest):'—', ''],
+    ['أيام بدل راحة', erF(A.comp), hp?erF(B.comp):'—', ''],
+    ['ساعات الأوفرتايم المحتسبة', erH(ca?ca.otHrs:null), pa?erH(pa.otHrs):'—', erChgCell(D.attChg.otHrs)],
+    ['ساعات الانصراف المبكر (تُخصم قيمتها من الأوفرتايم)', erH(ca?ca.earlyHrs:null), pa?erH(pa.earlyHrs):'—', ''],
+    ['حالات عدم تسجيل الانصراف', erF(A.missingOut), hp?erF(B.missingOut):'—', ''],
+    ['<b>معدل الانضباط العام</b>', A.hasRecords&&erIsNum(A.rate)?erH(A.rate)+'%':'—', hp&&erIsNum(B.rate)?erH(B.rate)+'%':'—', erChgCell(D.attChg.rate)]
+  ];
+}
+function erAdvRowsList(D){
+  return [
+    ['سلف جديدة خلال الشهر (مبلغ / عدد)', erF(D.adv.cur.newTotal)+' ج.م / '+erF(D.adv.cur.newCount), erF(D.adv.prv.newTotal)+' ج.م / '+erF(D.adv.prv.newCount), erChgCell(D.advChg.fresh)],
+    ['أقساط السلف المستحقة للشهر (المخصومة بالكشف)', erF(D.adv.cur.instDue)+' ج.م', erIsNum(D.adv.prv.instDue)?erF(D.adv.prv.instDue)+' ج.م':'—', erChgCell(D.advChg.inst)],
+    ['إجمالي الرصيد المتبقي (حالي)', erF(D.adv.cur.remaining)+' ج.م', '—', ''],
+    ['المسدد تراكميًا (المبلغ − المتبقي)', erF(D.adv.cur.repaidCum)+' ج.م', '—', ''],
+    ['موظفون لديهم سلف قائمة', erF(D.adv.cur.empWithActive), '—', '']
+  ];
+}
+function erOtherRowsList(D){
+  return [
+    ['المسحوبات (إجمالي / عمليات)', erF(D.draws.cur.total)+' ج.م / '+erF(D.draws.cur.count), erF(D.draws.prv.total)+' ج.م / '+erF(D.draws.prv.count), erChgCell(D.drawsChg)],
+    ['الإيجارات (إجمالي / عقود)', erF(D.rent.cur.total)+' ج.م / '+erF(D.rent.cur.count), erIsNum(D.rent.prv.total)?erF(D.rent.prv.total)+' ج.م / '+erF(D.rent.prv.count):'—', erChgCell(D.exp.rentChg)],
+    ['الصدقات المسجلة بالشهر (إجمالي / حالات)', erF(D.chr.cur.total)+' ج.م / '+erF(D.chr.cur.count), erF(D.chr.prv.total)+' ج.م / '+erF(D.chr.prv.count), erChgCell(D.chrChg)],
+    ['↳ المستلم فعليًا', erF(D.chr.cur.received)+' ج.م / '+erF(D.chr.cur.receivedCount), erF(D.chr.prv.received)+' ج.م', ''],
+    ['↳ غير المستلم', erF(D.chr.cur.unreceived)+' ج.م / '+erF(D.chr.cur.unreceivedCount), erF(D.chr.prv.unreceived)+' ج.م', '']
+  ];
+}
+
+// ================================================================
+// تشغيل التاب
+// ================================================================
+function erSig(D){
+  return JSON.stringify([D.y, D.m, D.kpis.map(k=>[k.k, erIsNum(k.val)?Number(k.val):null, k.chg&&k.chg.state, k.chg&&erIsNum(k.chg.prev)?Number(k.chg.prev):null]), D.summary, D.recs.map(r=>r.text), D.eom.state, D.eom.top?D.eom.top.eid:null, D.notes]);
+}
+function erCsvRows(D){
+  return D.kpis.map(k=>({
+    'المؤشر': k.label, 'الشهر': D.label,
+    'القيمة': erIsNum(k.val) ? Number(k.val) : '',
+    'الشهر السابق': (k.chg && erIsNum(k.chg.prev)) ? Number(k.chg.prev) : '',
+    'نسبة التغير': erChgText(k.chg).replace(/,/g,'،')
+  }));
+}
+function reportExec(el){
+  let D;
+  try{ D = erBuild(); }
+  catch(err){
+    console.error('التقرير الإداري: تعذّر الإعداد', err);
+    el.innerHTML = '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;padding:22px;text-align:center;color:#9a3412;font-weight:700">تعذّر إعداد التقرير الإداري لهذا الشهر. باقي البرنامج وبياناته لم تتأثر.<div style="font-size:11.5px;margin-top:6px;font-weight:600">'+erEsc(err&&err.message||'')+'</div><button class="btn bg" style="margin-top:12px" onclick="erRefresh()">إعادة المحاولة</button></div>';
+    reportData = [];
+    return;
+  }
+  window._erData = D;
+  el.innerHTML = erDashboardHtml(D);
+  reportData = erCsvRows(D);
+  erAnimateCounters(el);
+  erSyncWaFromCloud();
+}
+function erRefresh(){
+  const el = document.getElementById('report-content');
+  if(!el || currentReport!=='exec') return;
+  reportExec(el);
+  toast('تم تحديث التقرير من البيانات الحالية (قراءة فقط)','success');
+}
+// نسخة بيانات جديدة وقت الطباعة/واتساب: لو اختلفت عن المعروضة نحدّث الشاشة بنفس النسخة
+function erFresh(){
+  const D = erBuild();
+  const old = window._erData;
+  const changed = !old || erSig(old)!==erSig(D);
+  window._erData = D;
+  const el = document.getElementById('report-content');
+  if(changed && currentReport==='exec' && el && el.querySelector('.er-card')){
+    el.innerHTML = erDashboardHtml(D); reportData = erCsvRows(D); erAnimateCounters(el);
+    toast('تم تحديث التقرير ببيانات أحدث قبل التنفيذ','info');
+  }
+  return D;
+}
+function erAnimateCounters(root){
+  try{
+    if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const items = Array.prototype.slice.call(root.querySelectorAll('.er-count')).map(n=>({n:n, v:n.getAttribute('data-v'), kind:n.getAttribute('data-kind'), fin:n.textContent})).filter(i=>i.v!=='' && isFinite(Number(i.v)));
+    if(!items.length) return;
+    const t0 = performance.now(), dur = 800;
+    const fmt = (kind,v)=> (kind==='pct'||kind==='hrs') ? erH(v) : erF(v);
+    const finish = ()=>items.forEach(i=>{ i.n.textContent = i.fin; });
+    function step(t){
+      const p = Math.min(1,(t-t0)/dur), e = 1-Math.pow(1-p,3);
+      if(p>=1 || !document.body.contains(root)){ finish(); return; }
+      items.forEach(i=>{ i.n.textContent = fmt(i.kind, Number(i.v)*e); });
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+    setTimeout(finish, dur+500);
+  }catch(e){}
+}
+
+// ================================================================
+// رقم واتساب الإدارة (الإعداد الوحيد المسموح بحفظه — بالأدمن فقط)
+// ================================================================
+function erDigits(s){
+  return String(s==null?'':s).replace(/[٠-٩]/g,d=>String(d.charCodeAt(0)-1632)).replace(/[۰-۹]/g,d=>String(d.charCodeAt(0)-1776)).replace(/[^\d]/g,'');
+}
+function erWaNormalize(ccRaw, numRaw){
+  const cc = erDigits(ccRaw).replace(/^0+/,'');
+  if(!cc) return {ok:false, err:'اكتب مفتاح الدولة (مثال: 20 لمصر).'};
+  if(cc.length>3) return {ok:false, err:'مفتاح الدولة غير صحيح (من 1 إلى 3 أرقام).'};
+  const rawStr = String(numRaw||'').trim();
+  if(!erDigits(rawStr)) return {ok:false, err:'اكتب رقم واتساب الإدارة.'};
+  let num = erDigits(rawStr);
+  if(/^(\+|00|٠٠)/.test(rawStr)){
+    num = num.replace(/^00/,'');
+    if(num.indexOf(cc)!==0) return {ok:false, err:'الرقم المكتوب لا يبدأ بمفتاح الدولة المحدد.'};
+    num = num.slice(cc.length);
+  }
+  num = num.replace(/^0+/,'');
+  if(cc==='20'){
+    if(num.length===12 && num.indexOf('20')===0) num = num.slice(2);
+    if(!/^1[0125]\d{8}$/.test(num)) return {ok:false, err:'رقم الموبايل المصري غير صحيح — لازم 11 رقم يبدأ بـ 010 أو 011 أو 012 أو 015.'};
+  } else if(!/^\d{6,12}$/.test(num)){
+    return {ok:false, err:'الرقم غير صحيح — لازم من 6 إلى 12 رقم بدون مفتاح الدولة.'};
+  }
+  const full = cc+num;
+  if(full.length>15) return {ok:false, err:'الرقم أطول من الحد الدولي (15 رقم).'};
+  return {ok:true, cc:cc, num:num, full:full};
+}
+function erWaValid(o){ return !!(o && typeof o==='object' && /^\d{8,15}$/.test(String(o.full||'')) && /^\d{1,3}$/.test(String(o.cc||'')) && String(o.full).indexOf(String(o.cc))===0); }
+function erGetWa(){
+  try{
+    const raw = localStorage.getItem(ER_WA_KEY);
+    if(!raw) return null;
+    const o = JSON.parse(raw);
+    return erWaValid(o) ? o : null;
+  }catch(e){ return null; }
+}
+let _erWaSyncing = false;
+async function erSyncWaFromCloud(){
+  if(_erWaSyncing) return false;
+  _erWaSyncing = true;
+  try{
+    if(typeof fbOnline==='undefined' || !fbOnline || !window._fb) return false;
+    const v = await fbPullAuth(ER_WA_FB_PATH);
+    if(v && erWaValid(v)){
+      const cur = erGetWa();
+      if(!cur || cur.full!==v.full || cur.at!==v.at){ _safeLocalSet(ER_WA_KEY, JSON.stringify({cc:String(v.cc), num:String(v.num||''), full:String(v.full), at:v.at||'', by:v.by||''})); return true; }
+    }
+  }catch(e){ console.warn('erSyncWaFromCloud', e&&e.message); }
+  finally{ _erWaSyncing = false; }
+  return false;
+}
+function erWaSettingsCardHtml(){
+  const w = erGetWa();
+  // لو الجهاز لسه ماعندوش الرقم، نجيبه من السحابة ونملا الحقول لو المستخدم لسه ماكتبش حاجة
+  if(!w){ erSyncWaFromCloud().then(ch=>{ if(!ch) return; const n = document.getElementById('er-wa-num'), c = document.getElementById('er-wa-cc'); const g = erGetWa(); if(g && n && c && !n.value){ c.value = g.cc; n.value = g.num; erWaStatus(); } }); }
+  return [
+    '<div style="background:#f8faff;border-radius:14px;padding:16px;border:1px solid #eaeffa" id="er-wa-card">',
+    '<div style="font-size:13px;font-weight:800;color:#0f2057;margin-bottom:4px"><span class="ms ms-sm">chat</span> رقم واتساب الإدارة للتقارير</div>',
+    '<div style="font-size:11.5px;color:#64748b;margin-bottom:10px;line-height:1.7">يُستخدم لزر «إرسال ملخص للإدارة عبر واتساب» في مركز التقارير. بيفتح واتساب بالرسالة الجاهزة وأنت اللي بتضغط «إرسال». الأدمن فقط يقدر يعدّل الرقم.</div>',
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">',
+    '<input type="text" id="er-wa-cc" class="fi" dir="ltr" inputmode="numeric" style="width:120px;flex:0 0 120px" placeholder="مفتاح الدولة" value="'+erEsc(w?w.cc:'20')+'"/>',
+    '<input type="text" id="er-wa-num" class="fi" dir="ltr" inputmode="tel" style="flex:1;min-width:170px" placeholder="رقم الموبايل بدون مفتاح الدولة (مثال 1012345678)" value="'+erEsc(w?w.num:'')+'"/>',
+    '</div>',
+    '<div id="er-wa-status" style="font-size:12px;font-weight:700;margin:8px 0;min-height:18px"></div>',
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">',
+    '<button class="btn bn" onclick="erSaveWaSetting()"><span class="ms ms-sm">save</span> حفظ الرقم</button>',
+    '<button class="btn bg" onclick="erClearWaSetting()"><span class="ms ms-sm">delete</span> حذف الرقم</button>',
+    '</div></div>'
+  ].join('');
+}
+function erWaStatus(msg, bad){
+  const el = document.getElementById('er-wa-status'); if(!el) return;
+  if(msg){ el.textContent = msg; el.style.color = bad?'#e03131':'#16a34a'; return; }
+  const w = erGetWa();
+  el.textContent = w ? ('الرقم المحفوظ حاليًا: +'+w.full) : 'لا يوجد رقم محفوظ بعد.';
+  el.style.color = w ? '#16a34a' : '#d97706';
+}
+function erSaveWaSetting(){
+  const s = getSession();
+  if(!s || s.role!=='admin'){ toast('تعديل رقم واتساب الإدارة للأدمن فقط','error'); return; }
+  const r = erWaNormalize((document.getElementById('er-wa-cc')||{}).value, (document.getElementById('er-wa-num')||{}).value);
+  if(!r.ok){ erWaStatus(r.err, true); return; }
+  const obj = {cc:r.cc, num:r.num, full:r.full, at:new Date().toISOString(), by:s.name||'admin'};
+  if(!_safeLocalSet(ER_WA_KEY, JSON.stringify(obj))){ erWaStatus('تعذّر الحفظ على هذا الجهاز.', true); return; }
+  try{ fbPushAuth(ER_WA_FB_PATH, obj); }catch(e){}
+  try{ logActivity('تحديث رقم واتساب الإدارة للتقارير',''); }catch(e){}
+  const c = document.getElementById('er-wa-cc'), n = document.getElementById('er-wa-num'); if(c) c.value = r.cc; if(n) n.value = r.num;
+  erWaStatus('تم الحفظ — الرقم الحالي: +'+r.full);
+  toast('تم حفظ رقم واتساب الإدارة','success');
+}
+function erClearWaSetting(){
+  const s = getSession();
+  if(!s || s.role!=='admin'){ toast('تعديل رقم واتساب الإدارة للأدمن فقط','error'); return; }
+  if(!erGetWa()){ erWaStatus('لا يوجد رقم محفوظ لحذفه.', true); return; }
+  if(!confirm('حذف رقم واتساب الإدارة المحفوظ؟')) return;
+  try{ localStorage.removeItem(ER_WA_KEY); }catch(e){}
+  try{ fbPushAuth(ER_WA_FB_PATH, null); }catch(e){}
+  try{ logActivity('حذف رقم واتساب الإدارة للتقارير',''); }catch(e){}
+  const n = document.getElementById('er-wa-num'); if(n) n.value = '';
+  erWaStatus();
+  toast('تم حذف الرقم','success');
+}
+
+// ================================================================
+// رسالة واتساب (مختصرة — بدون أسماء موظفين ولا تفاصيل سلف)
+// ================================================================
+function erWaText(D){
+  const ca = D.pay.cur, A = D.att.cur, e = D.exp;
+  const money = v => erIsNum(v) ? erF(v)+' ج.م' : 'غير متاح';
+  const L = [];
+  L.push('📊 *التقرير الإداري الشهري*');
+  L.push('🏢 *'+D.company+'*');
+  L.push('📅 *شهر: '+D.label+'*');
+  L.push('');
+  L.push('💰 *المؤشرات المالية*');
+  L.push('- إجمالي المصروفات: '+money(e.cur.total)+(e.cur.missing.length?' (غير شامل: '+e.cur.missing.join('، ')+')':''));
+  L.push('- إجمالي صافي المرتبات: '+money(ca?ca.net:null));
+  L.push('- إجمالي الإيجارات: '+money(D.rent.cur.total));
+  L.push('- إجمالي الصدقات: '+money(D.chr.cur.total));
+  L.push('- المصروفات الأخرى (مرتبات الفرعين): '+(erIsNum(D.otherExp.cur)?money(D.otherExp.cur):'غير مُدخلة'));
+  L.push('');
+  L.push('📈 *المقارنة بالشهر السابق ('+D.plabel+')*');
+  L.push('- تغير صافي المرتبات: '+erChgText(D.netChg));
+  L.push('- تغير إجمالي المصروفات: '+erChgText(e.chg)+((e.chg.state==='ok'&&!e.sameBasis)?' (على المكونات المتاحة)':''));
+  L.push('- أبرز أسباب التغير: '+D.cause);
+  L.push('');
+  L.push('👥 *الموارد البشرية*');
+  L.push('- إجمالي الموظفين: '+erF(A.totalEmp));
+  if(A.hasRecords){
+    L.push('- معدل الانضباط: '+(erIsNum(A.rate)?erH(A.rate)+'%':'غير متاح'));
+    L.push('- حالات التأخير: '+erF(A.lateCases));
+    L.push('- حالات الغياب: '+erF(A.perm+A.unauth)+' (بإذن '+erF(A.perm)+' / بدون إذن '+erF(A.unauth)+')');
+  } else L.push('- لا توجد سجلات حضور لهذا الشهر');
+  L.push('- إجمالي الأوفرتايم: '+(ca?erH(ca.otHrs)+' ساعة':'غير متاح'));
+  L.push('');
+  L.push('🏆 *الموظف المثالي*');
+  if(D.eom.state==='one') L.push(D.eom.top.nm+' — نسبة الانضباط '+erH(D.eom.rate)+'%');
+  else if(D.eom.state==='tie') L.push('تعادل بين '+erF(D.eom.tied.length)+' موظف — لم يُحدد فائز منفرد');
+  else L.push('لم يُحدد موظف مثالي هذا الشهر');
+  L.push('');
+  L.push('📋 *الملخص الإداري*');
+  let p1 = 'بلغ إجمالي المصروفات '+money(e.cur.total)+(e.chg.state==='ok'?(' بتغير '+erP(e.chg.pct)+' عن '+D.plabel):'')+'، وصافي مرتبات المصنع '+money(ca?ca.net:null)+(D.netChg.state==='ok'?(' ('+erP(D.netChg.pct)+')'):'')+'.';
+  let p2 = A.hasRecords ? ('بلغ معدل الانضباط '+(erIsNum(A.rate)?erH(A.rate)+'%':'غير متاح')+' مع '+erF(A.lateCases)+' حالة تأخير و'+erF(A.perm+A.unauth)+' حالة غياب.') : 'لا توجد سجلات حضور لهذا الشهر.';
+  const rec = D.recs.filter(r=>!/سلف|السلف/.test(r.text));
+  const pick = rec.find(r=>r.type==='warn') || rec.find(r=>r.type==='good') || rec[0];
+  if(pick) p2 += ' التوصية الرئيسية: '+pick.text;
+  L.push(p1); L.push(p2);
+  if(D.partial) L.push('⚠️ الشهر لم ينتهِ بعد (اليوم '+erF(D.partial.day)+' من '+erF(D.partial.dim)+') — الأرقام جزئية.');
+  if(D.pending>0) L.push('⚠️ يوجد '+erF(D.pending)+' حالة حضور بانتظار مراجعة المحاسب؛ الأرقام قابلة للتغير.');
+  L.push('');
+  L.push('_تقرير صادر من نظام إدارة المصنع._');
+  return L.join('\n');
+}
+function erSendWhatsApp(){
+  const s = getSession();
+  if(!s || !(s.role==='admin' || s.perms?.reports!==false)){ toast('ليس لديك صلاحية إرسال التقارير','error'); return; }
+  const w = erGetWa();
+  if(!w){ toast('لم يتم تسجيل رقم واتساب الإدارة. اطلب من الأدمن إضافته من لوحة الأدمن ← «رقم واتساب الإدارة للتقارير».','warning'); return; }
+  let D;
+  try{ D = erFresh(); }catch(err){ console.error(err); toast('تعذّر تجهيز ملخص التقرير','error'); return; }
+  const text = erWaText(D);
+  window._erLastWaText = text;
+  const url = 'https://wa.me/'+w.full+'?text='+encodeURIComponent(text);
+  let win = null;
+  try{ win = window.open(url,'_blank'); }catch(e){ win = null; }
+  if(!win){ toast('المتصفح منع فتح واتساب — اسمح بالنوافذ المنبثقة لهذا الموقع ثم اضغط الزر مرة أخرى','warning'); return; }
+  toast('تم فتح واتساب بالرسالة الجاهزة — راجعها واضغط «إرسال» بنفسك (لم يتم الإرسال بعد)','info');
+}
+
+// ================================================================
+// الطباعة A4 — تقرير مُنسّق للطباعة وليس نسخة من الشاشة
+// ================================================================
+const ER_PRINT_CSS = [
+'#er-print-section{display:none}',
+'@page{size:A4 portrait;margin:14mm 12mm 17mm 12mm;@bottom-center{content:"صفحة " counter(page) " من " counter(pages);font-family:Cairo,Tahoma,Arial,sans-serif;font-size:10pt;font-weight:700;color:#000}}',
+'@media print{',
+'html,body{background:#fff!important;margin:0!important;padding:0!important;height:auto!important;overflow:visible!important}',
+'body > *:not(#er-print-section){display:none!important}',
+'#er-print-section{display:block!important;direction:rtl;background:#fff;color:#000;font-family:Cairo,Tahoma,Arial,sans-serif;font-weight:700;font-size:10.5pt;line-height:1.6;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
+'#er-print-section *{color:#000!important;background:transparent!important;box-shadow:none!important;text-shadow:none!important;font-weight:700!important;box-sizing:border-box}',
+'#er-print-section .erp-page{page-break-after:always;break-after:page}',
+'#er-print-section .erp-page:last-child{page-break-after:auto;break-after:auto}',
+'#er-print-section .erp-top{display:flex;justify-content:space-between;border-bottom:2px solid #000;padding-bottom:4px;margin-bottom:10px;font-size:10pt}',
+'#er-print-section .erp-cover{text-align:center;border:3px double #000;padding:8px 10px;margin-bottom:8px}',
+'#er-print-section .erp-t1{font-size:21pt;line-height:1.35}',
+'#er-print-section .erp-t2{font-size:13pt;letter-spacing:.3px;direction:ltr}',
+'#er-print-section .erp-t3{font-size:14pt;margin-top:3px}',
+'#er-print-section h2.erp-h2{font-size:14pt;border-bottom:2px solid #000;margin:14px 0 6px;padding-bottom:2px;page-break-after:avoid;break-after:avoid}',
+'#er-print-section h3.erp-h3{font-size:12pt;margin:10px 0 4px;page-break-after:avoid;break-after:avoid}',
+'#er-print-section table.erp-t{width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:10pt;page-break-inside:avoid;break-inside:avoid}',
+'#er-print-section table.erp-t th,#er-print-section table.erp-t td{border:1.4px solid #000;padding:2.5px 6px;text-align:center;vertical-align:middle}',
+'#er-print-section table.erp-t th:first-child,#er-print-section table.erp-t td:first-child{text-align:right}',
+'#er-print-section table.erp-t thead{display:table-header-group}',
+'#er-print-section table.erp-t tr{page-break-inside:avoid;break-inside:avoid}',
+'#er-print-section table.erp-t th{border-bottom:2.4px solid #000}',
+'#er-print-section table.erp-t td .ms,#er-print-section table.erp-t td .ms-sm{display:none}',
+'#er-print-section table.erp-kpi{table-layout:fixed;font-size:9.5pt}',
+'#er-print-section table.erp-kpi td{white-space:nowrap;padding:2px 5px}',
+'#er-print-section table.erp-kpi td:last-child,#er-print-section table.erp-kpi th:last-child{white-space:normal;font-size:8.5pt}',
+'#er-print-section table.erp-kpi td:nth-child(4){white-space:normal;font-size:9pt}',
+'#er-print-section .erp-p{margin:4px 0;line-height:1.8;text-align:justify;page-break-inside:avoid;break-inside:avoid}',
+'#er-print-section .erp-note{border:1.4px solid #000;padding:5px 9px;margin:4px 0;font-size:10pt;page-break-inside:avoid;break-inside:avoid}',
+'#er-print-section .erp-bar{border:1.4px solid #000;height:10px;width:100%;min-width:60px}',
+'#er-print-section .erp-bar i{display:block;height:100%;background:#000!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
+'#er-print-section .erp-big{font-size:12pt}',
+'#er-print-section .erp-sign{display:flex;justify-content:space-between;gap:30px;margin-top:18px;page-break-inside:avoid;break-inside:avoid}',
+'#er-print-section .erp-sign div{flex:1;border-top:1.4px solid #000;padding-top:4px;text-align:center}',
+'#er-print-section ul.erp-ul{margin:4px 22px 6px 0;padding:0}',
+'#er-print-section ul.erp-ul li{margin:3px 0;page-break-inside:avoid;break-inside:avoid}',
+'}'
+].join('\n');
+
+function erPT(head, rows, opts){
+  opts = opts||{};
+  const cg = opts.widths ? '<colgroup>'+opts.widths.map(w=>'<col style="width:'+w+'%">').join('')+'</colgroup>' : '';
+  return '<table class="erp-t'+(opts.cls?' '+opts.cls:'')+'">'+cg+'<thead><tr>'+head.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'
+    + rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('') + '</tbody></table>';
+}
+function erpBar(pct){ const p = Math.max(0,Math.min(100,Number(pct)||0)); return '<div class="erp-bar"><i style="width:'+p.toFixed(1)+'%"></i></div>'; }
+function erpTop(D, title){
+  return '<div class="erp-top"><span>'+erEsc(D.company)+'</span><span>التقرير الإداري الشهري الشامل — '+erEsc(D.label)+'</span></div><h2 class="erp-h2" style="margin-top:0">'+title+'</h2>';
+}
+function erFmtKind(kind,v){
+  if(!erIsNum(v)) return '—';
+  if(kind==='money') return erF(v)+' ج.م';
+  if(kind==='pct') return erH(v)+'%';
+  if(kind==='hrs') return erH(v)+' ساعة';
+  return erF(v);
+}
+function erKpiNote(D,k){
+  return erEsc(k.sub||'') + ((k.k==='exp' && !D.exp.sameBasis && D.exp.chg.state!=='nodata') ? ' — المقارنة على المكونات المتاحة في الشهرين' : '');
+}
+function erTopChanges(D){
+  return D.kpis.filter(k=>k.chg && k.chg.state==='ok' && Math.abs(k.chg.diff)>0.0001).sort((a,b)=>Math.abs(b.chg.pct)-Math.abs(a.chg.pct)).slice(0,5);
+}
+function erPrintHtml(D){
+  const A = D.att.cur, B = D.att.prv, ca = D.pay.cur, pa = D.pay.prv;
+  const dateStr = D.generatedAt.toLocaleDateString('ar-EG',{year:'numeric',month:'long',day:'numeric'})+' — '+D.generatedAt.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'});
+  const pages = [];
+
+  // ===== 1) الملخص التنفيذي =====
+  pages.push(
+    '<section class="erp-page"><div class="erp-cover"><div class="erp-t1">التقرير الإداري الشهري الشامل</div><div class="erp-t2">Monthly Executive Management Report</div><div class="erp-t3">'+erEsc(D.company)+'</div></div>'
+    + erPT(['عن شهر','سنة','الشهر المقارن','تاريخ إعداد التقرير'], [[erEsc(MAR[D.m-1]), String(D.y), erEsc(D.plabel), erEsc(dateStr)]])
+    + '<h2 class="erp-h2">مؤشرات الأداء الرئيسية</h2>'
+    + erPT(['المؤشر','القيمة','الشهر السابق','نسبة التغير','ملاحظة'], D.kpis.map(k=>[erEsc(k.label), '<span class="erp-big">'+erEsc(erFmtKind(k.kind,k.val))+'</span>', erEsc(erFmtKind(k.kind, k.chg&&erIsNum(k.chg.prev)?k.chg.prev:null)), erEsc(erChgText(k.chg)), erKpiNote(D,k)]), {cls:'erp-kpi', widths:[26,17,15,22,20]})
+    + '<h2 class="erp-h2">الملخص التنفيذي</h2>'
+    + D.summary.map(p=>'<div class="erp-p">'+erEsc(p)+'</div>').join('')
+    + '</section>');
+
+  // ===== 2) التحليل المالي =====
+  let ana = '<div class="erp-note">لا تتوفر بيانات الشهر السابق لتحليل الأسباب.</div>';
+  if(D.analysis){
+    ana = '<div class="erp-p">'+(D.netChg.state==='ok' ? (D.netChg.diff>=0?'ارتفع':'انخفض')+' صافي المرتبات بنسبة '+erEsc(erP(Math.abs(D.netChg.pct)).replace('+',''))+(Math.abs(D.analysis.dNet)<0.5?'.':'، ويرجع حسابيًا إلى: '+erEsc(D.cause)+'.') : (D.netChg.state==='zeroprev'?'الشهر السابق بقيمة صفر — غير قابل لحساب نسبة التغير.':'لا تتوفر بيانات كافية لتحديد السبب.'))+'</div>'
+      + erPT(['البند','أثره على صافي المرتبات','نسبة مساهمته في الفرق'], erAnaRows(D))
+      + '<div class="erp-note">عدد الموظفين المستحقين: '+erF(D.analysis.countPrev)+' ← '+erF(D.analysis.countCur)+' (التغير في العدد منعكس داخل بنود الأساسي والبدلات). صافي الفرق: '+(D.analysis.dNet>0?'+':D.analysis.dNet<0?'−':'')+erF(Math.abs(D.analysis.dNet))+' ج.م.</div>';
+  }
+  pages.push(
+    '<section class="erp-page">'+erpTop(D,'التحليل المالي')
+    + '<h3 class="erp-h3">أولًا: جدول المرتبات ومقارنته بالشهر السابق</h3>'
+    + erPT(['البيان','الشهر الحالي','السابق','التغير %'], erPayTableRows(D))
+    + '<div class="erp-note">مصدر الشهر الحالي: '+erEsc(D.pay.curSrc.label)+' — مصدر الشهر السابق: '+erEsc(D.pay.prvSrc.label)+'. إجمالي الاستحقاقات ('+erF(ca?ca.gross:null)+' ج.م) غير مضاف للمصروفات؛ المحتسب هو الصافي فقط.</div>'
+    + '<h3 class="erp-h3">ثانيًا: تحليل أسباب التغير</h3>'+ana
+    + '<h3 class="erp-h3">ثالثًا: جدول المصروفات</h3>'
+    + erPT(['البند','الشهر الحالي','السابق','التغير %'], erExpTableRows(D))
+    + '<div class="erp-note">'+(D.exp.sameBasis?'':'نسبة التغير في الإجمالي محسوبة على المكونات المتاحة في الشهرين فقط ('+erEsc(D.exp.commonLabels.join('، ')||'—')+'). ')+'الصدقات والمسحوبات والسلف تظهر في قسم الالتزامات ولا تُضاف للإجمالي حتى لا يتكرر احتساب مبلغ سبق دخوله في صافي المرتبات.</div>'
+    + '</section>');
+
+  // ===== 3) التحليل البياني (جداول بديلة للرسوم) =====
+  const share = D.exp.cur.comps.filter(c=>erIsNum(c.v));
+  const shareTotal = share.reduce((s,c)=>s+Number(c.v),0);
+  const shareTbl = share.length && shareTotal>0
+    ? erPT(['المكوّن','القيمة (ج.م)','النسبة من الإجمالي','التمثيل'], share.map(c=>[erEsc(c.label), erF(c.v), (Number(c.v)/shareTotal*100).toLocaleString('ar-EG',{maximumFractionDigits:1})+'%', erpBar(Number(c.v)/shareTotal*100)]))
+    : '<div class="erp-note">لا توجد بيانات لتوزيع المصروفات.</div>';
+  const compTbl = ca ? erPT(['المكوّن','الشهر الحالي','السابق','الفرق'], [['الرواتب الأساسية','basic'],['البدلات','allow'],['الأوفرتايم','ot'],['الاستقطاعات','deduct']].map(x=>[x[0], erF(ca[x[1]]), pa?erF(pa[x[1]]):'—', pa?((ca[x[1]]-pa[x[1]]>0?'+':ca[x[1]]-pa[x[1]]<0?'−':'')+erF(Math.abs(ca[x[1]]-pa[x[1]]))):'—'])) : '<div class="erp-note">لا توجد بيانات مرتبات.</div>';
+  const otTbl = ca ? erPT(['المؤشر','الشهر الحالي','السابق','التغير'], [['ساعات الأوفرتايم', erH(ca.otHrs)+' ساعة', pa?erH(pa.otHrs)+' ساعة':'—', erChgText(D.attChg.otHrs)],['تكلفة الأوفرتايم', erF(ca.ot)+' ج.م', pa?erF(pa.ot)+' ج.م':'—', erChgText(D.attChg.otCost)]]) : '<div class="erp-note">لا توجد بيانات.</div>';
+  const tMax = Math.max.apply(null, D.trend.map(t=>erNum(t.value)).concat([1]));
+  const trendTbl = erPT(['الشهر','إجمالي المصروفات (ج.م)','التمثيل','المصدر'], D.trend.map(t=>[erEsc(t.full), erIsNum(t.value)?erF(t.value):'غير متاح', erIsNum(t.value)?erpBar(Number(t.value)/tMax*100):'—', t.src==='live'?'الشهر الحالي':(t.src==='archive'?'نسخة مؤرشفة':'لا توجد بيانات مؤرشفة')]));
+  pages.push(
+    '<section class="erp-page">'+erpTop(D,'التحليل البياني (بصيغة جداول ثابتة)')
+    + '<h3 class="erp-h3">توزيع المصروفات</h3>'+shareTbl
+    + '<h3 class="erp-h3">مقارنة مكونات المرتبات</h3>'+compTbl
+    + '<h3 class="erp-h3">الأوفرتايم — ساعات وتكلفة</h3>'+otTbl
+    + '<h3 class="erp-h3">اتجاه المصروفات — آخر 6 شهور (المتاح فقط)</h3>'+trendTbl
+    + '<div class="erp-note">الشهور غير المؤرشفة لا تظهر أرقامها هنا لعدم وجود نسخة مجمّدة لها.</div>'
+    + '</section>');
+
+  // ===== 4) الموارد البشرية =====
+  let eom;
+  if(D.eom.state==='one'){
+    const t = D.eom.top;
+    eom = erPT(['الموظف المثالي','كود الموظف','نسبة الانضباط','أيام الحضور','مرات التأخير'], [['<span class="erp-big">'+erEsc(t.nm)+'</span>', erEsc(t.cd||'—'), erH(D.eom.rate)+'%', erF(t.present), erF(t.lateDays)]])
+      + '<div class="erp-note">'+erEsc('اختير لأنه حضر '+t.present+' يوم بدون أي تأخير أو غياب بدون إذن أو انصراف ناقص'+(t.perm?('، مع '+t.perm+' يوم غياب بإذن فقط'):'')+'.')+'</div>';
+  } else if(D.eom.state==='tie'){
+    eom = '<div class="erp-p">تعادل بين '+erF(D.eom.tied.length)+' موظف'+(D.eom.tied.length<=3?': '+D.eom.tied.map(t=>erEsc(t.nm)+' ('+erEsc(t.cd||'—')+')').join('، '):' — عدد المتعادلين كبير فلا يُعلن فائز منفرد')+'</div><div class="erp-note">متساوون في أيام الحضور ('+erF(D.eom.top.present)+') وأيام الغياب بإذن ('+erF(D.eom.top.perm)+') — لا يوجد معيار فصل أدق في بيانات الحضور.</div>';
+  } else eom = '<div class="erp-note">لم يتم تحديد موظف مثالي لهذا الشهر. '+erEsc(D.eom.reason||'')+'</div>';
+  pages.push(
+    '<section class="erp-page">'+erpTop(D,'الموارد البشرية والانضباط')
+    + '<h3 class="erp-h3">إحصائيات الحضور والتأخير والغياب والأوفرتايم</h3>'
+    + erPT(['المؤشر','الشهر الحالي','السابق','التغير'], erHrRows(D))
+    + '<div class="erp-note"><b>تعريف معدل الانضباط:</b> أيام الحضور المنتظم (بدون تأخير يتجاوز السماح) ÷ أيام العمل المسجلة فعليًا (حضور + غياب بإذن + غياب بدون إذن)، للموظفين غير المستثنين من نظام الحضور ('+erF(A.exempt)+' مستثنى). لا تدخل الراحات والإجازات في المقام، وتُحتسب الحالات المكررة في اليوم الواحد مرة واحدة، وقرارات المحاسب المعتمدة مأخوذة كما هي في سجلات الحضور.</div>'
+    + '<h3 class="erp-h3">موظف الشهر المثالي — Employee of the Month</h3>'+eom
+    + '<div class="erp-note">المعايير: عدم وجود تأخير غير مستثنى أو غياب بدون إذن أو انصراف ناقص، بحد أدنى '+erF(D.eom.minDays||3)+' أيام عمل مسجلة؛ والترتيب بأكثر أيام حضور ثم أقل غياب بإذن. الإجازات والراحات لا تُعد مخالفات. لا تُعرض قوائم بأسماء الموظفين في هذا التقرير.</div>'
+    + '</section>');
+
+  // ===== 5) الالتزامات =====
+  pages.push(
+    '<section class="erp-page">'+erpTop(D,'الالتزامات والمصروفات الأخرى')
+    + '<h3 class="erp-h3">السلف والاستقطاعات</h3>'+erPT(['البند','الشهر الحالي','السابق','التغير %'], erAdvRowsList(D))
+    + '<div class="erp-note">النظام لا يسجّل السداد الفعلي لكل شهر على حدة؛ المسدد معروض تراكميًا، والقسط المستحق هو ما خُصم في كشف الشهر.</div>'
+    + '<h3 class="erp-h3">المسحوبات والإيجارات والصدقات</h3>'+erPT(['البند','الشهر الحالي','السابق','التغير %'], erOtherRowsList(D))
+    + '<div class="erp-note">المسحوبات مخصومة أصلًا من صافي المرتبات فلا تُضاف للمصروفات. الإيجارات: النظام لا يسجّل حالة السداد. الصدقات: كما في تاب الصدقات (الحالات المسجلة بالشهر) وحالة الاستلام الفعلية.</div>'
+    + '<h3 class="erp-h3">المصروفات الأخرى (مرتبات الفرعين)</h3>'
+    + erPT(['البند','الشهر الحالي','السابق'], [['مرتبات الفرع الرئيسي', erIsNum(D.branch.cur.main)?erF(D.branch.cur.main):'غير مُدخل', erIsNum(D.branch.prv.main)?erF(D.branch.prv.main):'غير متاح'],['مرتبات فرع شبراملس', erIsNum(D.branch.cur.shub)?erF(D.branch.cur.shub):'غير مُدخل', erIsNum(D.branch.prv.shub)?erF(D.branch.prv.shub):'غير متاح'],['الإجمالي', erIsNum(D.otherExp.cur)?erF(D.otherExp.cur):'غير مُدخل', erIsNum(D.otherExp.prv)?erF(D.otherExp.prv):'غير متاح']])
+    + '</section>');
+
+  // ===== 6) النتائج والتوصيات =====
+  const findings = ['exp','net','rent','rate','late','abs','ot'].map(k=>D.kpis.find(x=>x.k===k)).filter(Boolean);
+  const changes = erTopChanges(D);
+  const follow = D.recs.filter(r=>r.type==='warn').map(r=>r.text).concat(D.notes);
+  pages.push(
+    '<section class="erp-page">'+erpTop(D,'النتائج والتوصيات')
+    + '<h3 class="erp-h3">أهم النتائج</h3><ul class="erp-ul">'+findings.map(k=>'<li>'+erEsc(k.label)+': '+erEsc(erKpiText(k))+' — '+erEsc(erChgText(k.chg))+'</li>').join('')+'</ul>'
+    + '<h3 class="erp-h3">أبرز التغيرات عن '+erEsc(D.plabel)+'</h3>'
+    + (changes.length ? '<ul class="erp-ul">'+changes.map(k=>'<li>'+erEsc(k.label)+': من '+erEsc(erFmtKind(k.kind,k.chg.prev))+' إلى '+erEsc(erFmtKind(k.kind,k.chg.cur))+' ('+erEsc(erP(k.chg.pct))+')</li>').join('')+'</ul>' : '<div class="erp-note">لا توجد تغيرات قابلة للقياس مقارنة بالشهر السابق.</div>')
+    + '<h3 class="erp-h3">نقاط تحتاج متابعة</h3>'
+    + (follow.length ? '<ul class="erp-ul">'+follow.map(t=>'<li>'+erEsc(t)+'</li>').join('')+'</ul>' : '<div class="erp-note">لا توجد نقاط معلّقة بناءً على البيانات المتاحة.</div>')
+    + '<h3 class="erp-h3">التوصيات الإدارية للشهر القادم</h3><ul class="erp-ul">'+D.recs.map(r=>'<li>'+erEsc(r.text)+'</li>').join('')+'</ul>'
+    + '<div class="erp-sign"><div>إعداد: ........................</div><div>مراجعة المحاسب: ........................</div><div>اعتماد الإدارة: ........................</div></div>'
+    + '<div class="erp-note" style="margin-top:14px">تقرير مُعدّ آليًا من بيانات النظام المسجلة (قراءة فقط) بتاريخ '+erEsc(dateStr)+'، ولا يغيّر أي بيانات أو حسابات. الأرقام مطابقة لما عُرض على الشاشة وفي رسالة الإدارة.</div>'
+    + '</section>');
+
+  return pages.join('');
+}
+function erPrint(){
+  let D;
+  try{ D = erFresh(); }catch(err){ console.error(err); toast('تعذّر تجهيز التقرير للطباعة','error'); return; }
+  ['er-print-section','er-print-style'].forEach(id=>{ const o = document.getElementById(id); if(o) o.remove(); });
+  const st = document.createElement('style'); st.id = 'er-print-style'; st.textContent = ER_PRINT_CSS;
+  const sec = document.createElement('div'); sec.id = 'er-print-section';
+  try{ sec.innerHTML = erPrintHtml(D); }catch(err){ console.error(err); toast('تعذّر بناء صفحات الطباعة','error'); return; }
+  document.head.appendChild(st); document.body.appendChild(sec);
+  const cleanup = ()=>{ window.removeEventListener('afterprint', cleanup); if(sec.parentNode) sec.remove(); if(st.parentNode) st.remove(); };
+  window.addEventListener('afterprint', cleanup);
+  setTimeout(()=>{ try{ window.print(); }catch(e){ cleanup(); } }, 120);
+}
+
+// ===== التقرير الإداري الشهري الشامل — نهاية =====
 
 // ===== كارت KPI مشترك =====
 // =====================================================
@@ -9848,7 +11027,7 @@ function reportCharity(el){
   </div>`;reportData = DB.chr;}
 
 // ===== طباعة وتصدير =====
-function printReport(){window.print()}
+function printReport(){if(currentReport==='exec'){erPrint();return;}window.print()}
 
 function exportReportCSV(){
   if(!reportData.length){toast('لا بيانات للتصدير','warning');return;}
@@ -10514,6 +11693,8 @@ function openAdminPanel(){
     '<button onclick="closeAdminPanel()" style="background:rgba(255,255,255,.15);border:none;border-radius:8px;padding:6px;cursor:pointer;color:#fff"><span class="ms">close</span></button>',
     '</div>',
     '<div style="padding:20px;display:flex;flex-direction:column;gap:18px">',
+    // رقم واتساب الإدارة للتقارير
+    erWaSettingsCardHtml(),
     // تغيير باسورد الأدمن
     '<div style="background:#f8faff;border-radius:14px;padding:16px;border:1px solid #eaeffa">',
     '<div style="font-size:13px;font-weight:800;color:#0f2057;margin-bottom:12px"><span class="ms ms-sm">lock</span> تغيير كلمة مرور الأدمن</div>',
