@@ -242,10 +242,6 @@ body.auth-mode {
       <button onclick="doLogin()" style="width:100%;background:linear-gradient(135deg,#0ea5a0,#0f2057);color:#fff;border:none;border-radius:12px;padding:13px;font-size:14px;font-weight:800;cursor:pointer;font-family:'Cairo',sans-serif;transition:.2s" onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">
         <span style="margin-left:8px">🔑</span> دخول
       </button>
-      <div style="text-align:center;margin-top:12px">
-        <a href="#" onclick="exportDeviceBackupNoLogin();return false" style="font-size:11.5px;color:#7dd8f5;text-decoration:underline;cursor:pointer">💾 حفظ نسخة من بيانات الجهاز ده (من غير دخول ولا اتصال)</a>
-        <div id="device-backup-msg" style="display:none;margin-top:8px;font-size:12px;font-weight:700;color:#86efac"></div>
-      </div>
 
       <!-- URCOD Footer -->
       <div id="urcod-click-area" style="margin-top:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;user-select:none" onclick="handleUrcodClick()">
@@ -274,6 +270,10 @@ body.auth-mode {
       <div style="display:flex;gap:8px">
         <button onclick="document.getElementById('admin-mo').style.display='none';urcodClicks=0" style="flex:1;background:rgba(255,255,255,.06);color:#94a3b8;border:none;border-radius:10px;padding:10px;cursor:pointer;font-family:'Cairo',sans-serif">إلغاء</button>
         <button onclick="doAdminLogin()" style="flex:1;background:linear-gradient(135deg,#0ea5a0,#0f2057);color:#fff;border:none;border-radius:10px;padding:10px;font-weight:700;cursor:pointer;font-family:'Cairo',sans-serif">دخول</button>
+      </div>
+      <div style="text-align:center;margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)">
+        <a href="#" onclick="exportDeviceBackupNoLogin();return false" style="font-size:11.5px;color:#7dd8f5;text-decoration:underline;cursor:pointer">💾 حفظ نسخة من بيانات الجهاز ده (من غير دخول ولا اتصال)</a>
+        <div id="device-backup-msg" style="display:none;margin-top:8px;font-size:12px;font-weight:700;color:#86efac"></div>
       </div>
     </div>
   </div>
