@@ -2533,6 +2533,7 @@ async function initFirebaseOnLogin(){
   // الجهاز الجديد بيستنوها عشان جهاز فاضي/جديد ميرفعش حاجة للسحابة قبل ما
   // ينزّل بياناته منها (سبب حادثة مسح البيانات)
   window._fbInitialSyncDone = false;
+  window._fbLoginSyncRunning = true; // الراحة التلقائية تستنى لحد ما مزامنة الدخول تخلص
   try{
     await initFirebase();
     if(fbOnline){
@@ -2550,6 +2551,10 @@ async function initFirebaseOnLogin(){
     }
   } finally {
     window._fbInitialSyncDone = true;
+    window._fbLoginSyncRunning = false;
+    // بعد ما بيانات السحابة نزلت ودُمجت (والقرارات اليدوية اتحمت بالدمج) —
+    // تسجيل الراحات الأسبوعية المستحقة تلقائيًا
+    try{ autoRestSafeScan({force:true, rerender:true}); }catch(e){}
   }
 }
 
@@ -2709,7 +2714,7 @@ function bar(id,pct){const b=document.getElementById(id);if(b)setTimeout(()=>b.s
 
 // ===================== ROUTER =====================
 function go(p){
-  if(!PGS[p])p='dashboard';document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));const el=document.getElementById('page-'+p);if(el)el.classList.add('active');document.querySelectorAll('.ni').forEach(a=>a.classList.toggle('on',a.dataset.p===p));document.getElementById('bc').textContent=PGS[p];if(location.hash!=='#'+p)history.pushState(null,'','#'+p);closeMob();const R={dashboard:renderDash,employees:renderEmp,payroll:renderPay,attendance:renderAtt,advances:renderAdv,draws:renderDraws,rent:renderRent,formulas:loadRules,charity:renderChr,reports:()=>renderReport(currentReport),leave:renderLeave,restdays:renderRestDays,loancheck:initLoanCheck,archive:renderArchivePage,actiontracking:renderActionTracking};if(R[p])R[p]();if(p==='reports')renderReport(currentReport);}
+  if(!PGS[p])p='dashboard';document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));const el=document.getElementById('page-'+p);if(el)el.classList.add('active');document.querySelectorAll('.ni').forEach(a=>a.classList.toggle('on',a.dataset.p===p));document.getElementById('bc').textContent=PGS[p];if(location.hash!=='#'+p)history.pushState(null,'','#'+p);closeMob();try{autoRestSafeScan()}catch(e){}const R={dashboard:renderDash,employees:renderEmp,payroll:renderPay,attendance:renderAtt,advances:renderAdv,draws:renderDraws,rent:renderRent,formulas:loadRules,charity:renderChr,reports:()=>renderReport(currentReport),leave:renderLeave,restdays:renderRestDays,loancheck:initLoanCheck,archive:renderArchivePage,actiontracking:renderActionTracking};if(R[p])R[p]();if(p==='reports')renderReport(currentReport);}
 window.addEventListener('hashchange',()=>go(location.hash.replace('#','')||'dashboard'));// ===================== MOBILE =====================
 function toggleMob(){document.getElementById('sb').classList.toggle('mobile-open');document.getElementById('sb-overlay').classList.toggle('open')}
 function closeMob(){document.getElementById('sb').classList.remove('mobile-open');document.getElementById('sb-overlay').classList.remove('open')}
@@ -3648,6 +3653,46 @@ function saveAtt(){
   const isExtraDay = ott==='day_extra';
   const st = isExtraDay ? 'يوم عمل إضافي' : document.getElementById('af-st').value;
   const rec={id:uid(),eid,dt,y:Number(yr),m:Number(mn),d:Number(dy),ti:document.getElementById('af-in').value,to:document.getElementById('af-out').value,ot:Number(document.getElementById('af-ot').value||0),ott,st,nt:document.getElementById('af-nt').value,lateMin,isLate:lateMin>gr('lt_gr',15),editedBy:getSession()?.name||'نظام',editedAt:new Date().toISOString()};DB.att.push(rec);sv('att',DB.att);document.getElementById('att-mo').classList.remove('open');toast(isExtraDay?'✅ تم تسجيل يوم عمل إضافي — سيُضاف كبند في المرتب':'تم تسجيل الحضور','success');renderAtt();renderDash();}
+// ===== نص حالة "يوم الراحة المعتاد" لليوم اللي مالوش سجل — عرض فقط =====
+// بيستخدم نفس دالة computeRestCycle ونفس شروط الفحص التلقائي بالظبط (قراءة فقط:
+// مفيش كتابة في DB ولا استدعاء لـ sv ولا أي تغيير في قرارات المحاسب). الهدف
+// إن الشاشة تقول الحقيقة: هل الموظف أكمل 6 أيام عمل (يوم الراحة مستحق ويُسجَّل
+// تلقائيًا عند الفحص) ولا لسه مكملش
+function attRestDueLabel(e, dt){
+  const base = (txt, col)=>'<div style="font-size:9.5px;color:'+col+';margin-top:2px">'+txt+'</div>';
+  const plain = base('يوم الراحة المعتاد', '#d97706');
+  try{
+    if(!e || !dt) return plain;
+    const rdN = (e.restDay!==undefined && e.restDay!=='') ? Number(e.restDay) : -1;
+    const scanned = e.st==='نشط' && !e.attExempt && !e.lateExempt && e.restDay!==undefined && e.restDay!==null
+      && String(e.restDay).trim()!=='' && e.workTime && String(e.workTime).trim()!=='';
+    if(!scanned || rdN<0) return plain;
+    if(dt >= getCairoTodayStr()) return base('⏳ يوم الراحة المعتاد — اليوم لم ينتهِ بعد', '#d97706');
+    if(hasAccountantLock(e.id, dt)) return plain;
+    const [yy,mm,dd] = dt.split('-').map(Number);
+    const days = [];
+    for(let d=1; d<=dd; d++){
+      const dts = yy+'-'+String(mm).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+      const att = DB.att.find(a=>a.eid===e.id && a.dt===dts);
+      const leaveRec = DB.leaves.find(l=>l.eid===e.id && l.status!=='ملغاة' && l.from<=dts && l.to>=dts);
+      days.push({dt:dts, dow:new Date(yy,mm-1,d).getDay(), hasAttendance:!!(att&&att.ti), hasCheckout:!!(att&&att.to), isLeave:!!leaveRec, existingStatus: att ? att.st : (leaveRec ? 'إجازة اعتيادية' : null)});
+    }
+    const res = computeRestCycle(days, rdN);
+    const last = res[res.length-1];
+    let counter = 0;
+    res.slice(0,-1).forEach(r=>{
+      if(r.status==='حضور' || r.status==='إجازة اعتيادية') counter++;
+      else if(r.status==='راحة أسبوعية' || r.status==='يوم بدل راحة') counter = 0;
+    });
+    if(last && last.decision==='rest_due')
+      return base('✅ يوم راحة أسبوعية مستحق (أكمل '+counter+' يوم عمل محتسب) — يُسجَّل تلقائيًا عند الفحص (فتح الجرس)', '#16a34a');
+    if(last && last.decision==='rest_swap_taken')
+      return base('✅ يوم بدل راحة مستحق — يُسجَّل تلقائيًا عند الفحص (فتح الجرس)', '#16a34a');
+    if(last && last.decision==='needs_review')
+      return base('⏳ يوم الراحة المعتاد — لم يُستحق بعد ('+counter+' من 6 أيام عمل محتسبة)', '#d97706');
+    return plain;
+  }catch(err){ return plain; }
+}
 function renderAtt(){
   // تعبئة قائمة الموظفين في at-ef
   const efEl = document.getElementById('at-ef');
@@ -3771,7 +3816,7 @@ function renderAtt(){
   </td>
   <td style="text-align:center">
     <span class="bd" style="background:${bg};color:${cl}">${isEmpty?'لا يوجد سجل':a.st}</span>
-    ${isEmpty&&isRestDow?'<div style="font-size:9.5px;color:#d97706;margin-top:2px">⏳ يوم الراحة المعتاد — لم يُستحق بعد</div>':''}
+    ${isEmpty&&isRestDow?attRestDueLabel(e,a.dt):''}
     ${(()=>{
       const pendingIss = DB.issues.find(i=>i.eid===a.eid&&i.dt===a.dt&&i.status==='بانتظار المراجعة');
       if(!pendingIss) return '';
@@ -4035,7 +4080,7 @@ function calcH(t1,t2){
   const d=((h2*60+m2)-(h1*60+m1))/60;
   return d>0?d.toFixed(1)+'س':'—';
 }
-function delAtt(id){DB.att=DB.att.filter(a=>a.id!==id);sv('att',DB.att);renderAtt();renderDash();toast('حُذف','success')}
+function delAtt(id){const _delRec=DB.att.find(a=>a.id===id);DB.att=DB.att.filter(a=>a.id!==id);sv('att',DB.att);try{lockDeletedAutoRest(_delRec)}catch(e){console.warn('lockDeletedAutoRest',e)}renderAtt();renderDash();toast('حُذف','success')}
 
 // ===================== ADVANCES =====================
 function openAdvMo(){document.getElementById('advf-dt').value=new Date().toISOString().slice(0,10);document.getElementById('adv-mo').classList.add('open')}
@@ -5525,7 +5570,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏬 شركة حلوانى الغربية</div>
+    <div class="company">🏛️ شركة حلوانى الغربية</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -6756,6 +6801,75 @@ function scanAttendanceIssues(){
   updateNotifDot();
 }
 
+// ===== تشغيل تلقائي آمن لفحص الراحة الأسبوعية =====
+// بيستدعي scanAttendanceIssues() الموجودة كما هي (من غير أي تغيير فيها) عند
+// نقاط آمنة: فتح أي صفحة، بعد انتهاء مزامنة الدخول من السحابة، وبعد وصول
+// بيانات بصمة جديدة. الفحص نفسه بيتخطى أي يوم عليه قرار محاسب (hasAccountantLock)
+// ومبيكتبش فوق أي سجل، فتكراره آمن. ما بيشتغلش أثناء مزامنة الدخول عشان
+// ما نحسبش على بيانات محلية قديمة قبل ما قرارات المحاسب تنزل من السحابة
+function autoRestSafeScan(opts){
+  opts = opts || {};
+  try{
+    if(window._fbLoginSyncRunning) return false;
+    if(window._autoRestBusy) return false;
+    if(!Array.isArray(DB.emp) || DB.emp.length===0) return false;
+    if(typeof getSession==='function' && !getSession()) return false;
+    window._autoRestBusy = true;
+    const a0 = DB.att.length, i0 = DB.issues.length;
+    try{
+      if(opts.force) window._lastScanTs = 0;
+      scanAttendanceIssues();
+    } finally { window._autoRestBusy = false; }
+    if(opts.rerender && (DB.att.length!==a0 || DB.issues.length!==i0)){
+      const act = document.querySelector('.page.active');
+      const pid = act ? act.id.replace('page-','') : '';
+      const map = {dashboard:'renderDash', attendance:'renderAtt', payroll:'renderPay', restdays:'renderRestDays', actiontracking:'renderActionTracking', leave:'renderLeave'};
+      const fn = map[pid];
+      if(fn && typeof window[fn]==='function') window[fn]();
+    }
+    return true;
+  }catch(err){
+    console.warn('autoRestSafeScan: خطأ غير حرج', err);
+    return false;
+  }
+}
+
+// ===== حذف يدوي لسجل راحة مسجّل تلقائيًا = قرار محاسب نهائي =====
+// قبل كده كان الحذف بيمسح السجل بس، فالفحص التلقائي كان بيرجّعه من جديد.
+// هنا بنسجّل قرار الحذف جوه سجل "متابعة الإجراءات" الخاص بنفس اليوم
+// (trk_<eid>_<dt>) بالصيغة اللي isLockedIssue/hasAccountantLock/دمج Firebase
+// بيعترفوا بيها أصلاً — فالقرار بيتثبّت في البيانات المحفوظة نفسها ومبيتغيّرش
+// بأي فحص أو مزامنة. بيتطبّق على السجلات اللي سجّلها النظام تلقائيًا
+// (autoRest) فقط، وأي حذف تاني للحضور بيفضل زي ما هو
+function lockDeletedAutoRest(rec){
+  if(!rec || !rec.autoRest) return false;
+  const session = (typeof getSession==='function') ? getSession() : null;
+  const by = (session && session.name && session.name!=='نظام') ? session.name : 'المحاسب';
+  const nowIso = new Date().toISOString();
+  const trackId = 'trk_'+rec.eid+'_'+rec.dt;
+  let iss = DB.issues.find(i=>i.id===trackId);
+  if(iss){
+    if(isLockedIssue(iss)) return false; // فيه قرار محاسب محفوظ بالفعل — يفضل كما هو
+    iss.history = Array.isArray(iss.history) ? iss.history : (iss.history ? [iss.history] : []);
+    iss.history.push({from:iss.finalAction||null, to:'deleted', by, at:nowIso});
+    iss.finalAction = 'deleted';
+    iss.status = 'تم التعديل';
+    iss.decidedBy = by;
+    iss.decidedAt = nowIso;
+  } else {
+    DB.issues.push({
+      id: trackId, eid: rec.eid, dt: rec.dt, type:'راحة أسبوعية',
+      systemFinding:'سجّل النظام هذا اليوم راحة أسبوعية تلقائيًا ثم حذفه المحاسب يدويًا',
+      suggestedAction:'rest', executedAction:null, finalAction:'deleted',
+      status:'تم التعديل',
+      history:[{from:'rest', to:'deleted', by, at:nowIso}],
+      createdAt:nowIso, createdBy:'نظام', decidedBy:by, decidedAt:nowIso
+    });
+  }
+  sv('issues', DB.issues);
+  return true;
+}
+
 // ===== عدد الإشعارات المعلّقة (يستخدم في النقطة الحمراء والعداد) =====
 function pendingNotifCount(){
   // الإشعارات خاصة بالشهر الحالي فقط
@@ -7402,6 +7516,8 @@ async function performFingerprintSync(){
 
     if(result.added>0 || result.updated>0){
       sv('att',DB.att);
+      // بيانات بصمة جديدة وصلت — نسجّل الراحات المستحقة تلقائيًا (القرارات اليدوية محمية)
+      try{ autoRestSafeScan({force:true}); }catch(e){}
       renderDash(); renderAtt();
     }
   } catch(e) {
@@ -9725,7 +9841,7 @@ function trackingActionLabel(a){
   const labels = {
     rest:'راحة', rest_swap:'بدل راحة', permitted:'غياب بإذن',
     unauthorized:'غياب بدون إذن', leave:'إجازة اعتيادية', present:'حضور',
-    review_checkout:'مراجعة الانصراف', auto_matched:'مطابق تلقائيًا', null:'—'
+    review_checkout:'مراجعة الانصراف', auto_matched:'مطابق تلقائيًا', deleted:'حُذف يدويًا', null:'—'
   };
   return labels[a] || a || '—';
 }
