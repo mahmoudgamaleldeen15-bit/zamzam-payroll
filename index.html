@@ -4139,6 +4139,7 @@ function saveAttEdit(attId, btnEl){
     //    ومرة بالجديدة) ممكن السباق بين الاتنين يخلي فايربيز يحتفظ بالحالة
     //    القديمة غلط لو وصلت هي التانية — فبقى تحديث واحد نهائي بس، بيمثّل
     //    قرار المحاسب الفعلي، ومفيش أي نسخة وسطية بتتبعت خالص
+    const _attBeforeEdit = DB.att[idx];
     DB.att[idx] = {
       ...DB.att[idx],
       ti: ti||DB.att[idx].ti,
@@ -4153,7 +4154,19 @@ function saveAttEdit(attId, btnEl){
     //    نفسه — نفس الدالة المستخدمة في تعديل كشف المرتبات، عشان مايبقاش
     //    فيه منطقين مختلفين لنفس العملية
     if(newSt !== oldSt){
-      convertAttStatus(attId, newSt);
+      const _convRes = convertAttStatus(attId, newSt);
+      if(_convRes === false){
+        // ⛔ التحويل فشل (مثلاً: رصيد الإجازات غير كافٍ) — ما نقولش "تم الحفظ"
+        // كذب. نرجّع السجل لحالته قبل التعديل المؤقت (اللي كان في الذاكرة بس)،
+        // ونسيب نافذة التعديل مفتوحة عشان المحاسب يختار حالة تانية. رسالة
+        // الخطأ الأصلية (من convertAttStatus) هي اللي بتفضل ظاهرة.
+        const _j = DB.att.findIndex(a=>a.id===attId);
+        if(_j>=0){
+          DB.att[_j] = _attBeforeEdit;
+          if(btnEl){ btnEl.dataset.saving=''; btnEl.disabled=false; btnEl.style.opacity=''; btnEl.style.cursor=''; }
+          return;
+        }
+      }
     } else {
       sv('att', DB.att);
       resolveRelatedIssue(DB.att[idx].eid, DB.att[idx].dt, newSt);
