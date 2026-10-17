@@ -154,11 +154,12 @@ html,body{margin:0;padding:0;font-family:'Cairo',sans-serif;background:#f0f4ff;c
    ===================================================================== */
 .mob-only{display:none}
 @media (max-width:768px){
-  html,body:not(.auth-mode){overflow-x:hidden!important;max-width:100%}
+  /* ملحوظة: ما نحطش overflow-x:hidden على html و body مع بعض — بيخلّي body حاوية سكرول مستقلة وبيعطّل السكرول الرأسي على بعض الموبايلات (خصوصًا iOS). قاعدة body الأصلية (Section 19) كفاية لقفل السكرول الأفقي */
+  html,body:not(.auth-mode){max-width:100%}
   body{-webkit-text-size-adjust:100%}
 
   /* ===== المحتوى ===== */
-  .ca{margin-right:0!important;width:100%;max-width:100%;min-width:0;overflow-x:hidden}
+  .ca{margin-right:0!important;width:100%;max-width:100%;min-width:0;overflow-x:clip}
   .page{padding:12px 12px 28px!important;min-width:0;max-width:100%}
   .page *{min-width:0}
   .page h1{font-size:18px!important;line-height:1.35}
