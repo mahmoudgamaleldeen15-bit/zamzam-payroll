@@ -145,6 +145,86 @@ html,body{margin:0;padding:0;font-family:'Cairo',sans-serif;background:#f0f4ff;c
   #track-cards{ display:flex !important; }
 }
 </style>
+<style id="zz-mobile-pro">
+/* =====================================================================
+   عرض الموبايل الاحترافي — يعمل فقط على الشاشات 768px أو أصغر.
+   الكمبيوتر (أكبر من 768px) لا يتأثر نهائيًا: كل القواعد جوه @media.
+   السبب الجذري للمشكلة القديمة: صف الشريط العلوي كان أعرض من الشاشة،
+   فبيوسّع الصفحة والمتصفح يعتبرها "عرض كمبيوتر" وتظهر القائمة فوق المحتوى.
+   ===================================================================== */
+.mob-only{display:none}
+@media (max-width:768px){
+  html,body:not(.auth-mode){overflow-x:hidden!important;max-width:100%}
+  body{-webkit-text-size-adjust:100%}
+
+  /* ===== المحتوى ===== */
+  .ca{margin-right:0!important;width:100%;max-width:100%;min-width:0;overflow-x:hidden}
+  .page{padding:12px 12px 28px!important;min-width:0;max-width:100%}
+  .page *{min-width:0}
+  .page h1{font-size:18px!important;line-height:1.35}
+
+  /* ===== الشريط العلوي: صف واحد مرتب ===== */
+  header{height:auto!important;min-height:56px;padding:6px 10px!important;padding-top:calc(6px + env(safe-area-inset-top,0px))!important;gap:8px!important;flex-wrap:nowrap!important}
+  header>div:first-child{flex:1 1 auto;min-width:0;gap:8px!important}
+  header>div:first-child>div{min-width:0}
+  header>div:first-child>div>span:not(#bc){display:none!important}
+  #bc{font-size:14.5px!important;font-weight:800!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:100%}
+  #mob-btn{display:inline-flex!important;flex:0 0 auto;width:40px;height:40px;padding:0!important;align-items:center;justify-content:center}
+  header>div:last-child{flex:0 0 auto;gap:6px!important;flex-wrap:nowrap!important}
+  header button[onclick="openAbout()"],
+  header button[onclick="logout()"],
+  #admin-btn,#pwa-install-btn,#fb-panel-btn,#server-indicator,
+  header>div:last-child>div[style*="width:1px"]{display:none!important}
+  header>div:last-child>div[onclick*="month-mo"]{padding:5px 8px!important;gap:3px!important}
+  header>div:last-child>div[onclick*="month-mo"] .ms:first-child{display:none}
+  #tb-month{font-size:11.5px!important;white-space:nowrap}
+  header button.btn.bi{width:38px;height:38px;padding:0!important;justify-content:center}
+  #fb-indicator{padding:6px 8px!important}
+  #fb-lbl{display:none!important}
+  header>div:last-child>div:last-child{padding:3px!important;gap:0!important}
+  header>div:last-child>div:last-child>div:last-child{display:none!important}
+
+  /* ===== القائمة الجانبية: درج جانبي حقيقي يفتح بالزرار ===== */
+  #sb{width:min(300px,86vw)!important;height:100vh;height:100dvh;z-index:320;box-shadow:none;transition:transform .3s cubic-bezier(.4,0,.2,1),visibility 0s linear .3s;transform:translateX(105%)!important;visibility:hidden}
+  #sb.mobile-open{transform:translateX(0)!important;visibility:visible;transition:transform .3s cubic-bezier(.4,0,.2,1),visibility 0s;box-shadow:-8px 0 40px rgba(9,22,61,.28)}
+  #sb-overlay.open{display:block;z-index:310}
+  #sb{overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+  #sb nav{flex:0 0 auto!important;overflow:visible!important}
+  #sb>div{flex:0 0 auto}
+  #sb .ni{padding:12px 14px;font-size:14px;border-radius:12px;min-height:44px}
+  #sb .ni .ms{flex:0 0 auto}
+  body.mob-menu-open{overflow:hidden!important}
+  /* إجراءات سريعة داخل القائمة (بتعوّض الأزرار المخفية من الشريط العلوي) */
+  .mob-only{display:block}
+  #mob-quick{padding:10px 10px 4px;border-top:1px solid #eaeffa;background:#fff}
+  #mob-quick .mq-user{display:flex;align-items:center;gap:10px;padding:6px 6px 10px}
+  #mob-quick .mq-av{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#0f2057,#0ea5a0);color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  #mob-quick .mq-nm{font-size:13px;font-weight:800;color:#0d1b3e;line-height:1.2}
+  #mob-quick .mq-rl{font-size:11px;color:#94a3b8}
+  #mob-quick .mq-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  #mob-quick .mq-b{display:flex;align-items:center;justify-content:center;gap:6px;min-height:42px;padding:8px 6px;border:none;border-radius:11px;background:#eef1fb;color:#0d1b3e;font-family:'Cairo',sans-serif;font-size:12.5px;font-weight:700;cursor:pointer}
+  #mob-quick .mq-b.red{background:#fff0f0;color:#e03131}
+  #mob-quick .mq-b.adm{background:#fff0f0;color:#e03131}
+
+  /* ===== لوحة التحكم: مؤشرات في عمودين بدل عمود طويل ===== */
+  .page [style*="auto-fill,minmax(190px"]{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px!important}
+  .page .kc{padding:13px!important}
+  .page .kc [style*="font-size:2"],.page .kc [style*="font-size:19"]{font-size:19px!important}
+
+  /* ===== شبكات عمودين متساويين → عمود واحد على الموبايل ===== */
+  .page [style*="grid-template-columns:1fr 1fr"]{grid-template-columns:1fr!important}
+
+  /* ===== الجداول: تمرير أفقي داخل الحاوية بدل خنق الأعمدة ===== */
+  .page :is(div,section):has(>table.dt){overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .page .dt thead th,.page .dt tbody td{white-space:nowrap}
+
+  /* ===== أحجام لمس مريحة + حقول بدون تكبير تلقائي ===== */
+  .btn{min-height:40px}
+  .fi,select.fi,input.fi,textarea.fi{font-size:16px!important}
+  .dr{width:100vw!important;max-width:100vw!important}
+  #toast{max-width:calc(100vw - 24px);min-width:0}
+}
+</style>
 <link id="pwa-manifest" rel="manifest" href="./manifest.json">
 </head>
 <body class="auth-mode" style="overflow:hidden">
@@ -326,6 +406,18 @@ body.auth-mode {
     <div style="font-size:10px;font-weight:800;color:#94a3b8;padding:10px 10px 4px;text-transform:uppercase;letter-spacing:.06em;margin-top:4px">المسؤولية المجتمعية</div>
     <a class="ni chr" data-p="charity" href="#charity" onclick="go('charity');return false"><span class="ms">volunteer_activism</span>وحدة الصدقات<span style="margin-right:auto;width:7px;height:7px;border-radius:50%;background:#7c3aed;flex-shrink:0"></span></a>
   </nav>
+  <!-- إجراءات سريعة للموبايل فقط — مخفية على الكمبيوتر، وبتنادي نفس الدوال الموجودة بالشريط العلوي -->
+  <div id="mob-quick" class="mob-only">
+    <div class="mq-user"><div class="mq-av" id="mq-av">م</div><div><div class="mq-nm" id="mq-nm">—</div><div class="mq-rl" id="mq-rl"></div></div></div>
+    <div class="mq-grid">
+      <button class="mq-b adm" id="mq-admin" style="display:none" onclick="closeMob();openAdminPanel()"><span class="ms">admin_panel_settings</span>لوحة الأدمن</button>
+      <button class="mq-b" onclick="closeMob();manualSync()"><span class="ms">sync</span>تحديث البصمة</button>
+      <button class="mq-b" onclick="closeMob();openFbPanel()"><span class="ms">cloud_sync</span>المزامنة</button>
+      <button class="mq-b" onclick="closeMob();openAbout()"><span class="ms">info</span>عن البرنامج</button>
+      <button class="mq-b" id="mq-install" onclick="installPWA()"><span class="ms">install_mobile</span>تثبيت التطبيق</button>
+      <button class="mq-b red" onclick="closeMob();logout()"><span class="ms">logout</span>تسجيل خروج</button>
+    </div>
+  </div>
   <div style="padding:10px;border-top:1px solid #eaeffa">
     <!-- إصدار البرنامج -->
     <div style="background:#f5f8ff;border-radius:11px;padding:9px 11px;display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -1908,10 +2000,52 @@ function updateFbIndicator(online){
 }
 
 // ===== رفع بيانات لـ Firebase =====
+// 🔒 حماية قرار المحاسب عند الرفع: لو السحابة اتعدّلت من جهاز تاني بعد آخر
+// مزامنة لينا (جهاز قديم/كان أوفلاين)، قبل ما نكتب 'att' أو 'issues' نقرأ
+// نسخة السحابة ونحافظ على أي قرار محاسب معتمد فيها (نفس دوال الدمج الموجودة
+// بس بالاتجاه العكسي: قرار السحابة المقفول يفضل إلا لو قرارنا المقفول أحدث).
+// لو الجهاز محدّث (العلامة متطابقة) → مفيش أي تغيير في سلوك الرفع.
+async function _protectCloudDecisions(key, data){
+  try{
+    if((key!=='att' && key!=='issues') || !Array.isArray(data)) return data;
+    const { ref, get, db } = window._fb;
+    const ktSnap = await get(ref(db, 'zz/_lastUpdateKeys/'+key));
+    const cloudTs = ktSnap.exists() ? (ktSnap.val()||{}).ts : null;
+    let marks = {}; try{ marks = JSON.parse(localStorage.getItem('zz_lastSyncKeys')||'{}')||{}; }catch(e){}
+    // محدّث فعلاً فقط لو عندنا علامة السحابة وهي مطابقة لعلامتنا — أي شك → نحمي
+    if(cloudTs && marks[key] === cloudTs) return data;
+    const rIssSnap = await get(ref(db, 'zz/issues'));
+    const cloudIssues = rIssSnap.exists() ? rIssSnap.val() : [];
+    const cIss = Array.isArray(cloudIssues) ? cloudIssues : [];
+    const mergedIssues = mergeIssuesFromRemote(cIss, DB.issues);
+    let out;
+    if(key==='issues'){
+      out = mergedIssues;
+    } else {
+      const rAttSnap = await get(ref(db, 'zz/att'));
+      const cloudAtt = rAttSnap.exists() ? rAttSnap.val() : [];
+      const ourById = {}; (DB.issues||[]).forEach(i=>{ if(i&&i.id) ourById[i.id]=i; });
+      // أيام قرار السحابة المقفول — إلا لو عندنا قرار مقفول لنفس السجل وأحدث
+      const lockIss = cIss.filter(ci=>{
+        if(!isLockedIssue(ci)) return false;
+        const o = ourById[ci.id];
+        return !(o && isLockedIssue(o) && o.decidedAt && ci.decidedAt && o.decidedAt > ci.decidedAt);
+      });
+      out = mergeAttFromRemote(Array.isArray(cloudAtt)?cloudAtt:[], data, lockIss);
+    }
+    if(JSON.stringify(out) !== JSON.stringify(data)){
+      DB[key] = out;
+      try{ localStorage.setItem('zz_'+key, JSON.stringify(out)); }catch(e){}
+      setTimeout(()=>{ try{ if(typeof renderAtt==='function') renderAtt(); if(typeof renderDash==='function') renderDash(); }catch(e){} }, 0);
+    }
+    return out;
+  }catch(e){ return data; }
+}
 async function fbPush(key, data){
   if(!fbOnline||!window._fb) return false;
   try{
     const { ref, set, db } = window._fb;
+    data = await _protectCloudDecisions(key, data);
     await set(ref(db, 'zz/'+key), data);
     return true;
   } catch(e){
@@ -4517,6 +4651,8 @@ function importAttCSV(input){
       }
       let added=0,skipped=0;records.forEach(r=>{
         if(!r.eid){skipped++;return;}
+        // 🔒 قرار المحاسب نهائي: أي يوم عليه قفل (تعديل/قرار يدوي) الاستيراد ما يلمسوش
+        if(hasAccountantLock(r.eid, r.dt)){skipped++;return;}
         const exists=DB.att.find(a=>a.eid===r.eid&&a.dt===r.dt);
         if(!exists){
           DB.att.push(r); added++;
@@ -4552,6 +4688,8 @@ function importAttCSV(input){
         const key = rec.eid+'_'+rec.dt;
         if(!processed.has(key)){
           processed.add(key);
+          // 🔒 ما نعيدش حساب الأوفر تايم لأي يوم عليه قفل محاسب
+          if(hasAccountantLock(rec.eid, rec.dt)) return;
           recalcDayOT(rec.eid, rec.dt);
         }
       });
@@ -5570,7 +5708,7 @@ function printLeaveForm(id){
 
   <!-- Header -->
   <div class="header">
-    <div class="company">🏛️ شركة حلوانى الغربية</div>
+    <div class="company">🍽️ شركة زمزم للمطاعم والحلويات</div>
     <div style="font-size:12px;color:#4a5982;margin-bottom:8px">نموذج طلب إجازة اعتيادية</div>
     <div class="form-title">طلب إجازة اعتيادية</div>
     <div style="margin-top:8px;display:flex;justify-content:center;gap:20px;font-size:11.5px;color:#4a5982">
@@ -6249,7 +6387,7 @@ function exportDeviceBackupNoLogin(){
 
 function importBackup(input){
   const file=input.files[0];if(!file)return;
-  if(!confirm('استيراد النسخة الاحتياطية سيستبدل كل البيانات الحالية. هل أنت متأكد؟')) return;
+  if(!confirm('استيراد النسخة الاحتياطية سيستبدل البيانات الحالية (ما عدا قرارات المحاسب المعتمدة — بتفضل زي ما هي). هل أنت متأكد؟')) return;
   const reader=new FileReader();
   reader.onload=function(e){
     try{
@@ -6259,8 +6397,17 @@ function importBackup(input){
       // جداول اتضافت بعدين (زي المسحوبات أو متابعة الإجراءات)، نسيب الموجود
       // حاليًا في البرنامج زي ما هو بدل ما نمسحه بالغلط لمجرد إنه مش في الملف
       let restoredCount = 0;
+      // 🔒 قرار المحاسب نهائي حتى مع استرجاع نسخة قديمة: القرارات المعتمدة
+      // الحالية (issues + سجلات الحضور المقفولة) بتتحفظ بنفس منطق الدمج
+      // المستخدم في جلب Firebase، والباقي يتسترجع زي ما هو
+      const _curIssues = DB.issues, _curAtt = DB.att;
       FB_SYNC_KEYS.forEach(k=>{
-        if(backup[k]!==undefined){ DB[k]=backup[k]; restoredCount++; }
+        if(backup[k]!==undefined){
+          let v = backup[k];
+          if(k==='issues') v = mergeIssuesFromRemote(_curIssues, backup.issues);
+          else if(k==='att') v = mergeAttFromRemote(_curAtt, backup.att, _curIssues);
+          DB[k]=v; restoredCount++;
+        }
       });
       Object.keys(DB).forEach(k=>{ if(FB_SYNC_KEYS.includes(k)) sv(k,DB[k]); });
       setCycleLabel();go('dashboard');
@@ -6335,7 +6482,10 @@ async function startFetch(){
     setProgress(90,'💾 جاري الحفظ...');// استيراد الحضور
     const notFound=[]; // أكواد من الجهاز مالهاش موظف مطابق في النظام
     records.forEach(r=>{
-      const emp=DB.emp.find(e=>e.cd===r.empCode);if(!emp){if(r.empCode&&!notFound.includes(r.empCode))notFound.push(r.empCode);return;}const eid=emp.id;// منطق المضاء المزدوج
+      const emp=DB.emp.find(e=>e.cd===r.empCode);if(!emp){if(r.empCode&&!notFound.includes(r.empCode))notFound.push(r.empCode);return;}const eid=emp.id;
+      // 🔒 قرار المحاسب نهائي: اليوم المقفول ما يتعدلش من جلب البصمة
+      if(hasAccountantLock(eid, r.date)){skippedAtt++;return;}
+      // منطق المضاء المزدوج
       const existFetch=DB.att.find(a=>a.eid===eid&&a.dt===r.date);
       if(existFetch){
         if(skipDup){skippedAtt++;return;}
@@ -8326,7 +8476,7 @@ function printRentStatement(){
 // كتابة على DB أو localStorage أو Firebase (الاستثناء الوحيد: رقم واتساب
 // الإدارة اللي بيحفظه الأدمن صراحةً من لوحة الأدمن).
 // ================================================================
-const ER_COMPANY = 'شركة حلوانى الغربية';
+const ER_COMPANY = 'شركة زمزم للمطاعم والحلويات';
 const ER_WA_KEY = 'zz_exec_wa';
 const ER_WA_FB_PATH = 'zz_auth/exec_wa';
 window._erData = null;
@@ -11450,6 +11600,60 @@ function togglePassVis(id, icon){
   else { inp.type='password'; icon.textContent='visibility'; }
 }
 
+// ===== صلاحية "الدخول من الموبايل" =====
+// الافتراضي: مسموح (أي مستخدم مالوش الحقل ده بيفضل يدخل من الموبايل زي ما كان).
+// بتتمنع بس لما الأدمن يلغي الصلاحية صراحةً (perms.mobile_login === false)،
+// وبتتطبّق على الموبايل بس — نفس المستخدم يدخل من الكمبيوتر عادي. الأدمن
+// مستثنى دايمًا، فمايتقفلش برّه البرنامج.
+function isMobileDevice(){
+  try{
+    const ua = navigator.userAgent || '';
+    if(/Android|iPhone|iPad|iPod|Mobile|Windows Phone|Opera Mini|IEMobile/i.test(ua)) return true;
+    if(navigator.userAgentData && navigator.userAgentData.mobile) return true;
+    // iPad (iPadOS بيعرّف نفسه كـMac) — الماك الحقيقي مفيهوش لمس متعدد
+    if(/Macintosh/i.test(ua) && (navigator.maxTouchPoints||0) > 1) return true;
+    // وضع "موقع سطح المكتب" في متصفح الموبايل بيخفي الـUA — بنعتمد على اللمس + حجم الشاشة الفعلي للجهاز
+    const minSide = Math.min(screen.width||0, screen.height||0);
+    // (حد 600 عشان لابتوب بشاشة لمس ما يتعرّفش غلط كموبايل)
+    if((navigator.maxTouchPoints||0) >= 1 && minSide > 0 && minSide <= 600) return true;
+  }catch(e){}
+  return false;
+}
+function mobileLoginDenied(user){
+  try{
+    if(!user || user.role==='admin') return false;
+    const fresh = getUsers().find(u=>u.name===user.name) || user;
+    if(fresh.role==='admin') return false;
+    if(!fresh.perms || fresh.perms.mobile_login!==false) return false;
+    return isMobileDevice();
+  }catch(e){ return false; }
+}
+// تحديث قائمة المستخدمين من Firebase قبل فحص صلاحية الموبايل (مهلة 4 ثواني — لو مفيش نت
+// بنكمل بآخر نسخة محفوظة على الجهاز). نفس عملية syncAuthFromFirebase الموجودة، بس بدري شوية
+async function refreshUsersForMobileCheck(){
+  try{
+    if(typeof navigator!=='undefined' && navigator.onLine===false) return false;
+    const wait=(ms)=>new Promise(r=>setTimeout(()=>r('__timeout__'),ms));
+    if(!fbInitialized){ await Promise.race([initFirebase(), wait(4000)]); }
+    if(!fbOnline) return false;
+    const fbUsers = await Promise.race([fbPullAuth(FB_AUTH_PATH), wait(4000)]);
+    if(Array.isArray(fbUsers)){
+      if(JSON.stringify(fbUsers) !== JSON.stringify(getUsers())){
+        _safeLocalSet(AUTH_KEYS.USERS, JSON.stringify(fbUsers));
+      }
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+function showMobileLoginDenied(){
+  const el = document.getElementById('login-error');
+  if(!el) return;
+  el.style.display='block';
+  el.textContent='غير مسموح لهذا المستخدم بالدخول من الموبايل. ادخل من الكمبيوتر أو تواصل مع مدير النظام.';
+  setTimeout(()=>{ el.style.display='none'; }, 8000);
+}
+
 async function doLogin(){
   const user = document.getElementById('login-user').value.trim();
   const pass = document.getElementById('login-pass').value;
@@ -11468,6 +11672,16 @@ async function doLogin(){
     } else {
       showLoginErr('اسم المستخدم أو كلمة المرور غير صحيحة');
     }
+    return;
+  }
+
+  // 📵 منع الدخول من الموبايل لو الأدمن ألغى الصلاحية دي لهذا المستخدم
+  // (سواء من المتصفح أو من التطبيق المثبّت). قبل القرار بنحدّث قائمة المستخدمين من
+  // السحابة لو فيه نت، عشان موبايل نسخته المحلية قديمة ما يدخلش بصلاحية اتلغت
+  if(found.role!=='admin' && isMobileDevice()){ await refreshUsersForMobileCheck(); }
+  if(mobileLoginDenied(found)){
+    try{ logActivity('محاولة دخول من موبايل مرفوضة', found.name); }catch(e){}
+    showMobileLoginDenied();
     return;
   }
 
@@ -11670,8 +11884,11 @@ function runSplash(){
         return;
       } else if(session.role !== 'admin' && age < 8){
         // المحاسب: جلسة صالحة 8 ساعات
-        enterApp(session);
-        return;
+        // (لو الأدمن منع الدخول من الموبايل لهذا المستخدم بعد ما سجّل دخول — الجلسة بتتقفل)
+        if(!mobileLoginDenied(session)){
+          enterApp(session);
+          return;
+        }
       }
       clearSession();
     }
@@ -11776,7 +11993,7 @@ function openAdminPanel(){
       <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#0f2057,#0ea5a0);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;flex-shrink:0">${initials}</div>
       <div style="flex:1">
         <div style="font-size:13px;font-weight:700;color:#0d1b3e">${nm}</div>
-        <div style="font-size:11px;color:#94a3b8">${u.role==='admin'?'أدمن':'محاسب'}</div>
+        <div style="font-size:11px;color:#94a3b8">${u.role==='admin'?'أدمن':'محاسب'}${(u.role!=='admin'&&u.perms&&u.perms.mobile_login===false)?' • 📵 ممنوع من الموبايل':''}</div>
       </div>
       <span style="background:${statusBg};color:${statusColor};border-radius:8px;padding:2px 9px;font-size:11px;font-weight:700">${statusText}</span>
       <div style="display:flex;gap:4px">
@@ -11898,6 +12115,14 @@ function showUserForm(u=null){
         </label>
         <div style="font-size:10.5px;color:#94a3b8;margin-top:4px">منفصلة عن صلاحية اتخاذ الإجراءات نفسها — معطّلة افتراضيًا</div>
       </div>
+      <div style="background:#eff6ff;border-radius:10px;padding:12px;border:1px solid #bfdbfe">
+        <div style="font-size:11.5px;font-weight:700;color:#1e40af;margin-bottom:6px">صلاحية مستقلة — طريقة الدخول</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px">
+          <input type="checkbox" id="uf-p-mobile_login" ${u?.perms?.mobile_login!==false?'checked':''} style="accent-color:#1d4ed8;width:15px;height:15px"/>
+          📱 السماح بالدخول من الموبايل
+        </label>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:4px">لو ألغيتها: المستخدم يقدر يدخل من الكمبيوتر عادي، لكن الدخول من الموبايل يتمنع. (لا تنطبق على الأدمن)</div>
+      </div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button class="btn bg" onclick="document.getElementById('user-form-mo').remove()">إلغاء</button>
         <button class="btn bn" onclick="saveUser()"><span class="ms ms-sm">save</span>حفظ</button>
@@ -11933,6 +12158,8 @@ async function saveUser(){
   ['employees','payroll','attendance','att_edit','advances','draws','rent','reports','formulas','leave','charity','view_action_tracking'].forEach(k=>{
     perms[k] = document.getElementById('uf-p-'+k)?.checked!==false;
   });
+  // صلاحية الدخول من الموبايل (مسموحة افتراضيًا)
+  perms.mobile_login = document.getElementById('uf-p-mobile_login')?.checked!==false;
 
   const users = getUsers();
   if(id){
@@ -12115,6 +12342,47 @@ window.addEventListener('load', ()=>{
   runSplash();
 });
 
+</script>
+<script>
+/* ===== دعم قائمة الموبايل (إضافة فقط — ما بتغيّرش أي دالة موجودة) ===== */
+(function(){
+  function syncMobQuick(){
+    try{
+      var g=function(i){return document.getElementById(i)};
+      var un=g('user-name'), ur=g('user-role');
+      if(g('mq-nm')&&un) g('mq-nm').textContent=un.textContent;
+      if(g('mq-rl')&&ur) g('mq-rl').textContent=ur.textContent;
+      if(g('mq-av')&&un) g('mq-av').textContent=(un.textContent||'م').trim().charAt(0)||'م';
+      var ab=g('admin-btn'); if(g('mq-admin')&&ab) g('mq-admin').style.display=(ab.style.display==='none')?'none':'flex';
+      var ib=g('pwa-install-btn'); if(g('mq-install')&&ib) g('mq-install').style.display=(ib.style.display==='none')?'none':'flex';
+    }catch(e){}
+  }
+  function init(){
+    var sb=document.getElementById('sb'); if(!sb) return;
+    var mb=document.getElementById('mob-btn');
+    if(mb) mb.addEventListener('click',syncMobQuick);
+    try{
+      new MutationObserver(function(){ document.body.classList.toggle('mob-menu-open', sb.classList.contains('mobile-open')); })
+        .observe(sb,{attributes:true,attributeFilter:['class']});
+    }catch(e){}
+    window.addEventListener('resize',function(){ if(window.innerWidth>768 && typeof closeMob==='function') closeMob(); });
+  }
+  // لو الأدمن منع الموبايل لمستخدم وهو داخل بالفعل من موبايل: نقفل جلسته (بيتحقق كل دقيقة وعند العودة للتطبيق)
+  function enforceMobilePerm(){
+    try{
+      var sess=getSession();
+      if(sess && typeof mobileLoginDenied==='function' && mobileLoginDenied(sess)){
+        try{ toast('تم منع الدخول من الموبايل لحسابك — سيتم تسجيل الخروج','error'); }catch(e){}
+        setTimeout(function(){ try{ clearSession(); }catch(e){} location.reload(); },1800);
+      }
+    }catch(e){}
+  }
+  setInterval(enforceMobilePerm,60000);
+  setTimeout(enforceMobilePerm,8000);
+  window.addEventListener('online',function(){ setTimeout(enforceMobilePerm,4000); });
+  document.addEventListener('visibilitychange',function(){ if(!document.hidden) enforceMobilePerm(); });
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
+})();
 </script>
 </body>
 </html>
